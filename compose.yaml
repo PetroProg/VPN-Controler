@@ -1,0 +1,47 @@
+services:
+  vpn-controler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vpn-controler
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    env_file:
+      - .env
+    environment:
+      - TZ=Europe/Zurich
+    depends_on:
+      - adguard
+    volumes:
+      - /var/run/tailscale:/var/run/tailscale:ro
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8086/api/health', timeout=2)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 96M
+
+  adguard:
+    image: adguard/adguardhome:v0.107.79
+    container_name: vpn-controler-adguard
+    restart: unless-stopped
+    ports:
+      - "192.168.178.65:53:53/udp"
+      - "192.168.178.65:53:53/tcp"
+      - "100.107.4.120:53:53/udp"
+      - "100.107.4.120:53:53/tcp"
+      - "3053:3000/tcp"
+    volumes:
+      - ./adguard/work:/opt/adguardhome/work
+      - ./adguard/conf:/opt/adguardhome/conf
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 150M

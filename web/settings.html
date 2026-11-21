@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="warm-paper" data-density="standard">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Настройки — VPN Controler</title>
+  <meta name="theme-color" content="#f5f3ee">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="VPN Controler">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="/icons/favicon.svg">
+  <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png">
+  <script>
+    (function () {
+      try {
+        var raw = localStorage.getItem('vc_settings_v1');
+        var cfg = raw ? JSON.parse(raw) : {};
+        var colors = {
+          'warm-paper': '#f5f3ee',
+          'emerald-tactical': '#090d0b',
+          'obsidian-amber': '#0d0d0f',
+          'matte-copper': '#0f0c0b'
+        };
+        var th = colors[cfg.theme] ? cfg.theme : 'warm-paper';
+        document.documentElement.dataset.theme = th;
+        document.documentElement.dataset.density = cfg.density === 'compact' ? 'compact' : 'standard';
+        var m = document.querySelector('meta[name="theme-color"]');
+        if (m) m.setAttribute('content', colors[th]);
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/css/themes.css?v=1">
+  <link rel="stylesheet" href="/css/app.css?v=1">
+</head>
+<body>
+
+  <header class="top-header">
+    <div class="top-header-inner">
+      <div class="brand-wrap">
+        <div class="brand-icon" aria-hidden="true">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            <path d="m9 12 2 2 4-4"/>
+          </svg>
+        </div>
+        <h1 class="brand-title" data-i18n="navSettings">Настройки</h1>
+      </div>
+
+      <nav class="desktop-nav" aria-label="Main">
+        <a href="/" data-i18n="navHome">Главная</a>
+        <a href="/settings" class="active" data-i18n="navSettings">Настройки</a>
+      </nav>
+
+      <div class="header-actions">
+        <span id="settings-live-clock" class="tag-pill mono">--:-- CET</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="app-shell">
+    <div class="settings-grid">
+      <!-- Left Column: Appearance, Behavior, Node & PWA -->
+      <div class="stack-col">
+        <section class="card">
+          <div class="card-head">
+            <h2 class="card-title" data-i18n="settingsAppearance">Оформление</h2>
+          </div>
+          <div id="theme-cards-grid" class="grid-2"></div>
+          <div class="hero-node-bar">
+            <span style="font-size:0.75rem;font-weight:600;color:var(--p-muted);" data-i18n="densityLabel">Плотность карточек</span>
+            <div class="chip-group">
+              <button type="button" data-density-opt="standard" class="chip-btn active" data-i18n="densityStd">Стандарт</button>
+              <button type="button" data-density-opt="compact" class="chip-btn" data-i18n="densityCompact">Компакт</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="card stack-col" style="gap:0.75rem;">
+          <h2 class="card-title" data-i18n="settingsBehavior">Обновление и поведение</h2>
+
+          <div>
+            <div style="font-size:0.75rem;font-weight:600;color:var(--p-muted);margin-bottom:0.3rem;" data-i18n="refreshLabel">Интервал автообновления</div>
+            <div id="refresh-interval-seg" class="seg-control cols-5"></div>
+          </div>
+
+          <div>
+            <div style="font-size:0.75rem;font-weight:600;color:var(--p-muted);margin-bottom:0.3rem;" data-i18n="defaultPauseLabel">Пауза щита по умолчанию</div>
+            <div id="default-pause-seg" class="seg-control cols-4"></div>
+          </div>
+
+          <div>
+            <div style="font-size:0.75rem;font-weight:600;color:var(--p-muted);margin-bottom:0.3rem;" data-i18n="defaultChartLabel">График по умолчанию</div>
+            <div class="seg-control cols-2">
+              <button type="button" data-defchart-opt="mesh" class="seg-opt" data-i18n="chartMesh">Трафик Mesh</button>
+              <button type="button" data-defchart-opt="dns24" class="seg-opt" data-i18n="chartDns24">DNS 24ч</button>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div>
+              <div style="font-size:0.75rem;font-weight:600;color:var(--p-muted);margin-bottom:0.3rem;" data-i18n="langLabel">Язык</div>
+              <div class="seg-control cols-2">
+                <button type="button" data-lang-opt="ru" class="seg-opt">RU</button>
+                <button type="button" data-lang-opt="en" class="seg-opt">EN</button>
+              </div>
+            </div>
+            <div>
+              <div style="font-size:0.75rem;font-weight:600;color:var(--p-muted);margin-bottom:0.3rem;" data-i18n="tzLabel">Часовой пояс</div>
+              <div class="seg-control cols-2">
+                <button type="button" data-tz-opt="CET" class="seg-opt">CET</button>
+                <button type="button" data-tz-opt="UTC" class="seg-opt">UTC</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card stack-col" style="gap:0.65rem;">
+          <h2 class="card-title" data-i18n="nodeTitle">Узел и подключение</h2>
+
+          <div class="list-row">
+            <span style="color:var(--p-muted);">Tailscale DNS</span>
+            <span id="node-dns-name" class="mono row-truncate" style="font-weight:700;">—</span>
+          </div>
+          <div class="list-row">
+            <span style="color:var(--p-muted);">DNS IP (Tailscale)</span>
+            <div style="display:flex;align-items:center;gap:0.4rem;">
+              <span id="node-ts-ip" class="mono" style="font-weight:700;">100.107.4.120</span>
+              <button type="button" id="node-ts-copy" data-copy="100.107.4.120" class="btn-mini">Копир.</button>
+            </div>
+          </div>
+          <div class="list-row">
+            <span style="color:var(--p-muted);">Локальный LAN IP</span>
+            <div style="display:flex;align-items:center;gap:0.4rem;">
+              <span id="node-lan-ip" class="mono" style="font-weight:700;">192.168.178.65</span>
+              <button type="button" id="node-lan-copy" data-copy="192.168.178.65" class="btn-mini">Копир.</button>
+            </div>
+          </div>
+          <div class="list-row">
+            <span style="color:var(--p-muted);">Стек</span>
+            <span id="node-stack-status" class="mono" style="font-weight:700;">—</span>
+          </div>
+          <div id="node-health-box" class="hint-box hidden" style="color:var(--p-warn);"></div>
+
+          <div class="grid-2">
+            <button type="button" id="pwa-install-btn" class="btn-primary">
+              <span>⬇</span><span data-i18n="pwaInstallBtn">Установить PWA</span>
+            </button>
+            <a id="open-adguard-link" href="http://127.0.0.1:3053" target="_blank" rel="noopener noreferrer" class="btn-secondary">
+              <span>🛡 AdGuard :3053 ↗</span>
+            </a>
+          </div>
+          <div id="pwa-hint-box" class="hint-box hidden"></div>
+          <button type="button" id="sw-reset-btn" class="btn-secondary w-full" data-i18n="swResetBtn">Сбросить кэш Service Worker</button>
+        </section>
+      </div>
+
+      <!-- Right Column: AdGuard Admin Tools -->
+      <div class="stack-col">
+        <section class="card stack-col" style="gap:0.625rem;">
+          <div class="card-head" style="margin-bottom:0;">
+            <h2 class="card-title" data-i18n="userRulesTitle">Пользовательские правила</h2>
+            <span id="user-rules-count" class="tag-pill mono">0</span>
+          </div>
+          <input id="settings-rule-input" type="text" class="field-input mono" placeholder="domain.com">
+          <div class="grid-2">
+            <button type="button" id="settings-rule-block-btn" class="btn-danger" data-i18n="btnBlock">Заблокировать</button>
+            <button type="button" id="settings-rule-allow-btn" class="btn-ok">Исключение @@</button>
+          </div>
+          <div id="user-rules-list" class="item-list"></div>
+        </section>
+
+        <section class="card stack-col" style="gap:0.625rem;">
+          <div class="card-head" style="margin-bottom:0;">
+            <h2 class="card-title" data-i18n="blocklistsTitle">Подписки фильтров</h2>
+            <button type="button" id="refresh-filters-btn" class="btn-mini">
+              <span id="refresh-filters-icon">↻</span>
+              <span data-i18n="refreshFiltersBtn">Обновить</span>
+            </button>
+          </div>
+          <div id="blocklists-list" class="item-list"></div>
+          <button type="button" id="clear-dns-cache-btn" class="btn-secondary w-full">
+            <span>🧹</span>
+            <span data-i18n="clearCacheBtn">Очистить кэш DNS</span>
+          </button>
+        </section>
+
+        <section class="card stack-col" style="gap:0.625rem;">
+          <div class="card-head" style="margin-bottom:0;">
+            <div>
+              <h2 class="card-title" data-i18n="rewritesTitle">Локальные DNS-перезаписи</h2>
+              <p class="card-sub" data-i18n="rewritesSub">Короткие домашние адреса *.home внутри сети</p>
+            </div>
+            <span id="rewrites-count" class="tag-pill mono">0</span>
+          </div>
+          <div class="grid-2">
+            <input id="rewrite-domain-input" type="text" class="field-input mono" placeholder="service.home">
+            <input id="rewrite-ip-input" type="text" class="field-input mono" value="192.168.178.65" placeholder="192.168.178.65">
+          </div>
+          <button type="button" id="rewrite-add-btn" class="btn-primary w-full">+ Добавить DNS-запись</button>
+          <div id="dns-rewrites-list" class="item-list"></div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <nav class="bottom-nav" aria-label="Mobile Navigation">
+    <div class="bottom-nav-inner">
+      <a href="/" class="bottom-tab">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        <span data-i18n="navHome">Главная</span>
+      </a>
+      <a href="/settings" class="bottom-tab active">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span data-i18n="navSettings">Настройки</span>
+      </a>
+    </div>
+  </nav>
+
+  <div id="app-toast" class="toast hidden" role="status">
+    <span id="app-toast-dot" class="toast-dot"></span>
+    <span id="app-toast-msg" class="row-truncate"></span>
+  </div>
+
+  <script type="module" src="/js/pages/settings.js?v=1"></script>
+</body>
+</html>

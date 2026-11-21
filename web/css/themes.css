@@ -1,0 +1,137 @@
+/* ==========================================================================
+   VPN Controler — 4 Non-Blue Theme Presets
+   Default: Variant D — Warm Paper
+   ========================================================================== */
+
+:root,
+[data-theme="warm-paper"] {
+  color-scheme: light;
+  --p-bg: #f5f3ee;
+  --p-surface: #ffffff;
+  --p-surface-2: #edeae2;
+  --p-surface-hover: #e5e1d7;
+  --p-border: #e4dfd5;
+  --p-border-strong: #d1cabd;
+  --p-text: #18181b;
+  --p-muted: #52525b;
+  --p-dim: #71717a;
+  --p-accent: #059669;
+  --p-accent-strong: #047857;
+  --p-accent-contrast: #ffffff;
+  --p-accent-soft: rgba(5, 150, 105, 0.11);
+  --p-ok: #059669;
+  --p-ok-soft: rgba(5, 150, 105, 0.12);
+  --p-warn: #d97706;
+  --p-warn-soft: rgba(217, 119, 6, 0.13);
+  --p-err: #dc2626;
+  --p-err-soft: rgba(220, 38, 38, 0.10);
+  --p-hero-grad: linear-gradient(135deg, #ffffff 0%, #eef8f3 100%);
+  --p-hero-paused-grad: linear-gradient(135deg, #ffffff 0%, #fef6e7 100%);
+  --p-shadow: 0 1px 2px rgba(24, 24, 27, 0.05), 0 6px 18px rgba(24, 24, 27, 0.04);
+  --p-nav-bg: rgba(245, 243, 238, 0.94);
+  --p-grid: rgba(24, 24, 27, 0.08);
+  --p-chart-rx: #059669;
+  --p-chart-rx-fill: rgba(5, 150, 105, 0.18);
+  --p-chart-tx: #d97706;
+  --p-chart-tx-fill: rgba(217, 119, 6, 0.13);
+  --p-chart-blocked: #dc2626;
+}
+
+[data-theme="emerald-tactical"] {
+  color-scheme: dark;
+  --p-bg: #090d0b;
+  --p-surface: #111815;
+  --p-surface-2: #18231e;
+  --p-surface-hover: #1e2c26;
+  --p-border: #1f2d27;
+  --p-border-strong: #2f453c;
+  --p-text: #f0fdf4;
+  --p-muted: #93a89e;
+  --p-dim: #62786e;
+  --p-accent: #10b981;
+  --p-accent-strong: #059669;
+  --p-accent-contrast: #042014;
+  --p-accent-soft: rgba(16, 185, 129, 0.15);
+  --p-ok: #34d399;
+  --p-ok-soft: rgba(52, 211, 153, 0.14);
+  --p-warn: #f59e0b;
+  --p-warn-soft: rgba(245, 158, 11, 0.16);
+  --p-err: #fb7185;
+  --p-err-soft: rgba(251, 113, 133, 0.15);
+  --p-hero-grad: linear-gradient(135deg, #111815 0%, #10241b 100%);
+  --p-hero-paused-grad: linear-gradient(135deg, #111815 0%, #241b0e 100%);
+  --p-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+  --p-nav-bg: rgba(9, 13, 11, 0.94);
+  --p-grid: rgba(240, 253, 244, 0.08);
+  --p-chart-rx: #34d399;
+  --p-chart-rx-fill: rgba(52, 211, 153, 0.22);
+  --p-chart-tx: #f59e0b;
+  --p-chart-tx-fill: rgba(245, 158, 11, 0.14);
+  --p-chart-blocked: #fb7185;
+}
+
+[data-theme="obsidian-amber"] {
+  color-scheme: dark;
+  --p-bg: #0d0d0f;
+  --p-surface: #16161a;
+  --p-surface-2: #1e1e24;
+  --p-surface-hover: #25252d;
+  --p-border: #27272a;
+  --p-border-strong: #3f3f46;
+  --p-text: #f4f4f5;
+  --p-muted: #a1a1aa;
+  --p-dim: #71717a;
+  --p-accent: #f59e0b;
+  --p-accent-strong: #d97706;
+  --p-accent-contrast: #09090b;
+  --p-accent-soft: rgba(245, 158, 11, 0.15);
+  --p-ok: #10b981;
+  --p-ok-soft: rgba(16, 185, 129, 0.14);
+  --p-warn: #f59e0b;
+  --p-warn-soft: rgba(245, 158, 11, 0.16);
+  --p-err: #ef4444;
+  --p-err-soft: rgba(239, 68, 68, 0.15);
+  --p-hero-grad: linear-gradient(135deg, #16161a 0%, #211a10 100%);
+  --p-hero-paused-grad: linear-gradient(135deg, #16161a 0%, #2a1811 100%);
+  --p-shadow: 0 2px 12px rgba(0, 0, 0, 0.42);
+  --p-nav-bg: rgba(13, 13, 15, 0.94);
+  --p-grid: rgba(244, 244, 245, 0.08);
+  --p-chart-rx: #10b981;
+  --p-chart-rx-fill: rgba(16, 185, 129, 0.20);
+  --p-chart-tx: #f59e0b;
+  --p-chart-tx-fill: rgba(245, 158, 11, 0.16);
+  --p-chart-blocked: #ef4444;
+}
+
+[data-theme="matte-copper"] {
+  color-scheme: dark;
+  --p-bg: #0f0c0b;
+  --p-surface: #191513;
+  --p-surface-2: #231d1a;
+  --p-surface-hover: #2c2420;
+  --p-border: #2d2522;
+  --p-border-strong: #443833;
+  --p-text: #fafaf9;
+  --p-muted: #a8a29e;
+  --p-dim: #78716c;
+  --p-accent: #f97316;
+  --p-accent-strong: #ea580c;
+  --p-accent-contrast: #120905;
+  --p-accent-soft: rgba(249, 115, 22, 0.15);
+  --p-ok: #4ade80;
+  --p-ok-soft: rgba(74, 222, 128, 0.14);
+  --p-warn: #fbbf24;
+  --p-warn-soft: rgba(251, 191, 36, 0.16);
+  --p-err: #f43f5e;
+  --p-err-soft: rgba(244, 63, 94, 0.15);
+  --p-hero-grad: linear-gradient(135deg, #191513 0%, #271a13 100%);
+  --p-hero-paused-grad: linear-gradient(135deg, #191513 0%, #2a1d11 100%);
+  --p-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+  --p-nav-bg: rgba(15, 12, 11, 0.94);
+  --p-grid: rgba(250, 250, 249, 0.08);
+  --p-chart-rx: #4ade80;
+  --p-chart-rx-fill: rgba(74, 222, 128, 0.20);
+  --p-chart-tx: #f97316;
+  --p-chart-tx-fill: rgba(249, 115, 22, 0.17);
+  --p-chart-blocked: #f43f5e;
+}

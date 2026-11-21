@@ -1,0 +1,35 @@
+# Python cache & bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables & secrets
+.env
+*.env.local
+
+# Testing & logs
+.pytest_cache/
+.coverage
+logs/
+*.log
+
+# AdGuard Home runtime & sensitive config
+adguard/work/
+adguard/conf/AdGuardHome.yaml
+adguard/conf/*.yaml
+
+# Agent files (never commit/push)
+STATE.md
+GEMINI.md
+
+# OS & IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

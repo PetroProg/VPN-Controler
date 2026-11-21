@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="warm-paper" data-density="standard">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>VPN Controler</title>
+  <meta name="description" content="Мобильный пульт управления Tailscale Mesh и AdGuard Home DNS Shield">
+  <meta name="theme-color" content="#f5f3ee">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="VPN Controler">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="/icons/favicon.svg">
+  <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png">
+  <script>
+    (function () {
+      try {
+        var raw = localStorage.getItem('vc_settings_v1');
+        var cfg = raw ? JSON.parse(raw) : {};
+        var colors = {
+          'warm-paper': '#f5f3ee',
+          'emerald-tactical': '#090d0b',
+          'obsidian-amber': '#0d0d0f',
+          'matte-copper': '#0f0c0b'
+        };
+        var th = colors[cfg.theme] ? cfg.theme : 'warm-paper';
+        document.documentElement.dataset.theme = th;
+        document.documentElement.dataset.density = cfg.density === 'compact' ? 'compact' : 'standard';
+        var m = document.querySelector('meta[name="theme-color"]');
+        if (m) m.setAttribute('content', colors[th]);
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/css/themes.css?v=1">
+  <link rel="stylesheet" href="/css/app.css?v=1">
+</head>
+<body>
+
+  <header class="top-header">
+    <div class="top-header-inner">
+      <div class="brand-wrap">
+        <div class="brand-icon" aria-hidden="true">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            <path d="m9 12 2 2 4-4"/>
+          </svg>
+        </div>
+        <h1 class="brand-title">VPN Controler</h1>
+      </div>
+
+      <nav class="desktop-nav" aria-label="Main">
+        <a href="/" class="active" data-i18n="navHome">Главная</a>
+        <a href="/settings" data-i18n="navSettings">Настройки</a>
+      </nav>
+
+      <div class="header-actions">
+        <span id="header-status-pill" class="status-pill mono">
+          <span class="status-dot"></span>
+          <span id="header-status-text" data-i18n="statusProtected">Защищено</span>
+        </span>
+        <button type="button" id="refresh-btn" class="icon-btn" title="Обновить" aria-label="Обновить">
+          <svg id="refresh-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/>
+            <path d="M21 3v5h-5"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="app-shell">
+    <!-- 1. HERO CARD: Shield & Tailscale Mesh -->
+    <section id="hero-card" class="card hero-card">
+      <div class="hero-layout">
+        <div class="hero-identity">
+          <div class="hero-shield-badge" aria-hidden="true">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+              <path d="m9 12 2 2 4-4"/>
+            </svg>
+          </div>
+          <div style="min-width:0;">
+            <h2 id="hero-title" class="hero-title" data-i18n="heroActive">Щит активен</h2>
+            <p id="hero-subtitle" class="hero-sub">AdGuard Home + Tailscale Mesh</p>
+          </div>
+        </div>
+
+        <div>
+          <div id="hero-active-controls" class="hero-controls-row">
+            <div class="chip-group">
+              <button type="button" data-pause-min="5" class="pause-dur-chip chip-btn mono">5м</button>
+              <button type="button" data-pause-min="15" class="pause-dur-chip chip-btn mono active">15м</button>
+              <button type="button" data-pause-min="60" class="pause-dur-chip chip-btn mono">60м</button>
+            </div>
+            <button type="button" id="hero-pause-btn" class="btn-secondary flex-1">
+              <span>⏱</span>
+              <span id="hero-pause-btn-text">Пауза 15 мин</span>
+            </button>
+          </div>
+
+          <div id="hero-paused-controls" class="hero-controls-row hidden">
+            <span id="hero-countdown-text" class="tag-pill warn mono" style="padding:0.5rem 0.75rem;font-weight:700;">Осталось 15:00</span>
+            <button type="button" id="hero-resume-btn" class="btn-primary flex-1">
+              <span>▶</span>
+              <span data-i18n="resumeNow">Возобновить сейчас</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero-node-bar">
+        <div class="hero-node-meta">
+          <span class="tag-pill mono">Tailscale</span>
+          <span id="hero-node-ip" class="mono" style="font-weight:700;">100.107.4.120</span>
+          <span id="hero-node-dns" class="row-truncate mono" style="color:var(--p-dim);"></span>
+        </div>
+        <button type="button" id="hero-copy-ip-btn" data-copy="100.107.4.120" class="btn-mini">
+          <span data-i18n="copy">Копировать</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- 2. BENTO KPI GRID -->
+    <section class="kpi-grid" aria-label="Ключевые показатели">
+      <div class="card kpi-card">
+        <div class="kpi-head">
+          <span data-i18n="kpiQueries">Запросы 24ч</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--p-accent);"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        </div>
+        <div class="kpi-val-row">
+          <span id="kpi-total-val" class="kpi-val mono">0</span>
+          <svg width="56" height="20" viewBox="0 0 56 20" aria-hidden="true">
+            <polyline id="kpi-sparkline-poly" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--p-accent);" points="1,14 55,14"/>
+          </svg>
+        </div>
+      </div>
+
+      <div class="card kpi-card">
+        <div class="kpi-head">
+          <span data-i18n="kpiBlocked">Заблокировано</span>
+          <span id="kpi-blocked-count" class="mono" style="font-weight:700;color:var(--p-err);">0</span>
+        </div>
+        <div>
+          <div id="kpi-blocked-pct" class="kpi-val mono">0.0%</div>
+          <div class="progress-track">
+            <div id="kpi-blocked-bar" class="progress-fill err" style="width:0%;"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card kpi-card">
+        <div class="kpi-head">
+          <span data-i18n="kpiPeers">Mesh Пиры</span>
+          <span id="kpi-peers-relay" class="tag-pill ok mono">fra</span>
+        </div>
+        <div class="kpi-val-row">
+          <span id="kpi-peers-online" class="kpi-val mono">0 / 0</span>
+        </div>
+      </div>
+
+      <div class="card kpi-card">
+        <div class="kpi-head">
+          <span data-i18n="kpiLatency">Отклик DNS</span>
+          <span id="kpi-threats-badge" class="mono" style="color:var(--p-ok);font-weight:700;">0 угроз</span>
+        </div>
+        <div class="kpi-val-row">
+          <span id="kpi-dns-ms" class="kpi-val mono">0.0 ms</span>
+          <span id="kpi-dns-provider" style="font-size:0.75rem;color:var(--p-dim);">Quad9</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. 3-SEGMENT SWITCHER -->
+    <div class="segment-bar" role="tablist">
+      <button type="button" role="tab" data-segment="network" class="seg-btn active">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="2" y="2" width="6" height="6" rx="1"/><rect x="16" y="2" width="6" height="6" rx="1"/><rect x="9" y="16" width="6" height="6" rx="1"/><path d="M5 8v3a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M12 12v4"/></svg>
+        <span data-i18n="segNet">Сеть</span>
+      </button>
+      <button type="button" role="tab" data-segment="dnslog" class="seg-btn">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/></svg>
+        <span data-i18n="segLog">Лог DNS</span>
+      </button>
+      <button type="button" role="tab" data-segment="shield" class="seg-btn">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        <span data-i18n="segShield">Щит</span>
+      </button>
+    </div>
+
+    <!-- SEGMENT 1: СЕТЬ -->
+    <section id="seg-panel-network" class="seg-net-grid">
+      <div class="stack-col">
+        <div class="card">
+          <div class="card-head" style="flex-wrap:wrap;">
+            <div>
+              <h3 class="card-title" data-i18n="activityTitle">Активность</h3>
+              <div id="chart-legend" class="legend-row"></div>
+            </div>
+            <div class="chip-group">
+              <button type="button" data-chart-mode="mesh" class="chart-mode-btn chip-btn active" data-i18n="chartMesh">Трафик Mesh</button>
+              <button type="button" data-chart-mode="dns24" class="chart-mode-btn chip-btn" data-i18n="chartDns24">DNS 24ч</button>
+            </div>
+          </div>
+          <div class="chart-box">
+            <canvas id="main-telemetry-canvas"></canvas>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3 class="card-title" data-i18n="top24Title">Топ за 24 часа</h3>
+            <div class="chip-group">
+              <button type="button" data-top-mode="domains" class="top-mode-btn chip-btn active" data-i18n="topDomains">Домены</button>
+              <button type="button" data-top-mode="clients" class="top-mode-btn chip-btn" data-i18n="topClients">Клиенты</button>
+            </div>
+          </div>
+          <div id="top-24h-list" class="top-list"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h3 class="card-title" data-i18n="peersTitle">Устройства Tailscale Mesh</h3>
+            <p class="card-sub" data-i18n="peersSub">Нажмите на устройство для пинга и деталей</p>
+          </div>
+          <span id="peers-count-badge" class="tag-pill mono">0 узлов</span>
+        </div>
+        <div id="peers-accordion-list" class="peers-list"></div>
+      </div>
+    </section>
+
+    <!-- SEGMENT 2: ЛОГ DNS -->
+    <section id="seg-panel-dnslog" class="stack-col hidden">
+      <div class="card">
+        <div class="input-row">
+          <div class="input-wrap">
+            <svg class="input-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            <input id="dns-search-input" type="text" class="field-input has-icon" data-i18n-placeholder="searchPlaceholder" placeholder="Поиск домена или клиента...">
+            <button type="button" id="dns-search-clear" class="input-clear-btn hidden" aria-label="Очистить">✕</button>
+          </div>
+          <button type="button" id="toggle-quick-rule-btn" class="btn-mini accent-soft" style="min-height:2.35rem;padding:0.45rem 0.75rem;" data-i18n="addRuleBtn">+ Правило</button>
+        </div>
+
+        <div id="quick-rule-drawer" class="quick-drawer hidden">
+          <div style="font-size:0.75rem;font-weight:700;" data-i18n="quickRuleTitle">Быстрое правило AdGuard</div>
+          <input id="quick-rule-domain" type="text" class="field-input mono" placeholder="example.com">
+          <div class="grid-2">
+            <button type="button" id="quick-rule-block-btn" class="btn-danger" data-i18n="btnBlock">Заблокировать</button>
+            <button type="button" id="quick-rule-allow-btn" class="btn-ok" data-i18n="btnAllow">Разрешить</button>
+          </div>
+        </div>
+
+        <div class="hero-controls-row" style="margin-top:0.625rem;">
+          <div class="chip-group">
+            <button type="button" data-log-status="all" class="log-status-chip chip-btn active" data-i18n="filterAll">Все</button>
+            <button type="button" data-log-status="blocked" class="log-status-chip chip-btn" data-i18n="filterBlocked">Заблок.</button>
+            <button type="button" data-log-status="allowed" class="log-status-chip chip-btn" data-i18n="filterAllowed">Разреш.</button>
+          </div>
+          <select id="dns-client-filter" class="field-select" style="width:auto;min-width:9rem;">
+            <option value="all" data-i18n="allDevices">Все устройства</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="dns-query-cards" class="dns-cards-grid"></div>
+    </section>
+
+    <!-- SEGMENT 3: ЩИТ -->
+    <section id="seg-panel-shield" class="seg-shield-grid hidden">
+      <div class="stack-col">
+        <div class="card">
+          <div class="card-head">
+            <h3 class="card-title" data-i18n="modulesTitle">Модули защиты AdGuard</h3>
+          </div>
+          <div id="shield-toggles-list" class="toggle-list"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3 class="card-title" data-i18n="dohTitle">Upstream DoH шлюз</h3>
+            <button type="button" id="probe-doh-btn" class="btn-mini">
+              <span id="probe-doh-icon">↻</span>
+              <span data-i18n="probeBtn">Замерить пинг</span>
+            </button>
+          </div>
+          <div id="doh-providers-grid" class="grid-2"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h3 class="card-title" data-i18n="servicesTitle">Блокировка сервисов в 1 тап</h3>
+            <p class="card-sub" data-i18n="servicesSub">Мгновенное ограничение для всей сети</p>
+          </div>
+          <span id="blocked-services-badge" class="tag-pill mono">0 заблок.</span>
+        </div>
+        <div id="blocked-services-grid" class="services-grid"></div>
+      </div>
+    </section>
+  </main>
+
+  <nav class="bottom-nav" aria-label="Mobile Navigation">
+    <div class="bottom-nav-inner">
+      <a href="/" class="bottom-tab active">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        <span data-i18n="navHome">Главная</span>
+      </a>
+      <a href="/settings" class="bottom-tab">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span data-i18n="navSettings">Настройки</span>
+      </a>
+    </div>
+  </nav>
+
+  <div id="app-toast" class="toast hidden" role="status">
+    <span id="app-toast-dot" class="toast-dot"></span>
+    <span id="app-toast-msg" class="row-truncate"></span>
+  </div>
+
+  <div id="app-sheet-backdrop" class="sheet-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="sheet-card">
+      <div class="sheet-handle"></div>
+      <div>
+        <h4 id="sheet-title" style="margin:0;font-size:0.9375rem;font-weight:700;">Подтверждение</h4>
+        <p id="sheet-desc" style="margin:0.35rem 0 0;font-size:0.75rem;color:var(--p-muted);"></p>
+      </div>
+      <div class="sheet-preview mono">
+        <span id="sheet-rule-preview"></span>
+      </div>
+      <div style="display:flex;gap:0.5rem;">
+        <button type="button" id="sheet-cancel-btn" class="btn-secondary flex-1">Отмена</button>
+        <button type="button" id="sheet-confirm-btn" class="btn-primary flex-1">Применить</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/js/pages/vpn.js?v=1"></script>
+</body>
+</html>
