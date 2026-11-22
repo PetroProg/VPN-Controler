@@ -83,24 +83,131 @@ class AdGuardClient:
 
     def __init__(self) -> None:
         self._doh_cache: Tuple[float, Dict[str, Optional[float]]] = (0.0, {})
+        self._overview_cache: Tuple[float, Optional[Dict[str, Any]]] = (0.0, None)
+        self._services_cache: Tuple[float, Optional[Dict[str, Any]]] = (0.0, None)
+        self._session_cookie: Optional[str] = None
+        self._auth_lock = asyncio.Lock()
 
-    def _make_client(self, timeout: Optional[float] = None) -> httpx.AsyncClient:
+    def invalidate_cache(self) -> None:
+        """Invalidate short-lived in-memory overview and services caches after a mutation."""
+        self._overview_cache = (0.0, None)
+        self._services_cache = (0.0, None)
+
+    def _make_client(
+        self,
+        timeout: Optional[float] = None,
+        *,
+        with_auth: bool = True,
+    ) -> httpx.AsyncClient:
+        effective_timeout = timeout or settings.ADGUARD_TIMEOUT_SECONDS
+        if with_auth and self._session_cookie:
+            return httpx.AsyncClient(
+                base_url=settings.ADGUARD_URL,
+                cookies={"agh_session": self._session_cookie},
+                timeout=effective_timeout,
+            )
+        if with_auth and settings.ADGUARD_PASSWORD:
+            return httpx.AsyncClient(
+                base_url=settings.ADGUARD_URL,
+                auth=(settings.ADGUARD_USER, settings.ADGUARD_PASSWORD),
+                timeout=effective_timeout,
+            )
         return httpx.AsyncClient(
             base_url=settings.ADGUARD_URL,
-            auth=(settings.ADGUARD_USER, settings.ADGUARD_PASSWORD),
-            timeout=timeout or settings.ADGUARD_TIMEOUT_SECONDS,
+            timeout=effective_timeout,
         )
 
+    async def _ensure_session(
+        self,
+        force: bool = False,
+        failed_cookie: Optional[str] = None,
+    ) -> bool:
+        """Obtain and cache AdGuard Home session cookie so requests skip per-call bcrypt."""
+        if not settings.ADGUARD_PASSWORD:
+            return True
+        if not force and self._session_cookie:
+            return True
+
+        async with self._auth_lock:
+            if not force and self._session_cookie:
+                return True
+            if (
+                force
+                and failed_cookie is not None
+                and self._session_cookie
+                and self._session_cookie != failed_cookie
+            ):
+                return True
+
+            login_timeout = max(settings.ADGUARD_TIMEOUT_SECONDS, 10.0)
+            try:
+                async with self._make_client(timeout=login_timeout, with_auth=False) as client:
+                    resp = await client.post(
+                        "/control/login",
+                        json={"name": settings.ADGUARD_USER, "password": settings.ADGUARD_PASSWORD},
+                    )
+                if resp.status_code == 200:
+                    cookies = getattr(resp, "cookies", None)
+                    cookie_val = cookies.get("agh_session") if hasattr(cookies, "get") else None
+                    if isinstance(cookie_val, str) and cookie_val:
+                        self._session_cookie = cookie_val
+                    else:
+                        self._session_cookie = None
+                    return True
+                self._session_cookie = None
+                logger.warning("AdGuard /control/login returned HTTP %s", resp.status_code)
+                return False
+            except Exception as exc:
+                self._session_cookie = None
+                logger.warning("AdGuard /control/login failed: %s", exc)
+                return False
+
+    async def _require_session(self) -> None:
+        if not await self._ensure_session():
+            raise AdGuardError("AdGuard Home authentication failed")
+
+    async def _request(
+        self,
+        client: httpx.AsyncClient,
+        method: str,
+        url: str,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        """Execute an AdGuard API request and refresh expired session cookies on 401."""
+        client_cookies = getattr(client, "cookies", None)
+        raw_cookie = client_cookies.get("agh_session") if hasattr(client_cookies, "get") else None
+        used_cookie = raw_cookie if isinstance(raw_cookie, str) and raw_cookie else self._session_cookie
+        resp = await getattr(client, method)(url, **kwargs)
+        if resp.status_code == 401 and settings.ADGUARD_PASSWORD:
+            if await self._ensure_session(force=True, failed_cookie=used_cookie):
+                cookies = getattr(client, "cookies", None)
+                if self._session_cookie and hasattr(cookies, "set"):
+                    cookies.set("agh_session", self._session_cookie)
+                resp = await getattr(client, method)(url, **kwargs)
+        return resp
+
     async def check_health(self) -> bool:
+        if not await self._ensure_session():
+            return False
         try:
             async with self._make_client(timeout=3.0) as client:
-                resp = await client.get("/control/status")
+                resp = await self._request(client, "get", "/control/status")
                 return resp.status_code == 200
         except Exception:
             return False
 
-    async def get_overview(self, ip_name_map: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    async def get_overview(
+        self,
+        ip_name_map: Optional[Dict[str, str]] = None,
+        *,
+        force: bool = False,
+    ) -> Dict[str, Any]:
         """Fetch full dashboard overview (status, 24h stats, toggles, rules, filters)."""
+        now = time.monotonic()
+        cached_ts, cached_data = self._overview_cache
+        if not force and cached_data is not None and (now - cached_ts) < 2.5:
+            return dict(cached_data)
+
         ip_map = ip_name_map or {}
         result: Dict[str, Any] = {
             "online": False,
@@ -135,17 +242,20 @@ class AdGuardClient:
             "tailscale_ip": settings.HOST_TAILSCALE_IP,
         }
 
+        if not await self._ensure_session():
+            return result
+
         try:
             async with self._make_client() as client:
                 resps = await asyncio.gather(
-                    client.get("/control/status"),
-                    client.get("/control/stats"),
-                    client.get("/control/filtering/status"),
-                    client.get("/control/safebrowsing/status"),
-                    client.get("/control/safesearch/status"),
-                    client.get("/control/parental/status"),
-                    client.get("/control/dns_info"),
-                    client.get("/control/blocked_services/get"),
+                    self._request(client, "get", "/control/status"),
+                    self._request(client, "get", "/control/stats"),
+                    self._request(client, "get", "/control/filtering/status"),
+                    self._request(client, "get", "/control/safebrowsing/status"),
+                    self._request(client, "get", "/control/safesearch/status"),
+                    self._request(client, "get", "/control/parental/status"),
+                    self._request(client, "get", "/control/dns_info"),
+                    self._request(client, "get", "/control/blocked_services/get"),
                     return_exceptions=True,
                 )
         except Exception as exc:
@@ -154,7 +264,11 @@ class AdGuardClient:
 
         r_stat, r_stats, r_filt, r_safe, r_ss, r_par, r_dns, r_svcs = resps
 
-        if not isinstance(r_stat, Exception) and r_stat.status_code == 200:
+        if isinstance(r_stat, Exception):
+            logger.warning("AdGuard /control/status error: %s", r_stat)
+        elif r_stat.status_code != 200:
+            logger.warning("AdGuard /control/status returned HTTP %s", r_stat.status_code)
+        else:
             sj = r_stat.json()
             result["online"] = True
             result["running"] = bool(sj.get("running", True))
@@ -162,7 +276,11 @@ class AdGuardClient:
             result["protection"] = bool(sj.get("protection_enabled", True))
             result["protection_disabled_duration_ms"] = int(sj.get("protection_disabled_duration") or 0)
 
-        if not isinstance(r_stats, Exception) and r_stats.status_code == 200:
+        if isinstance(r_stats, Exception):
+            logger.warning("AdGuard /control/stats error: %s", r_stats)
+        elif r_stats.status_code != 200:
+            logger.warning("AdGuard /control/stats returned HTTP %s", r_stats.status_code)
+        else:
             st = r_stats.json()
             total = int(st.get("num_dns_queries") or 0)
             blocked = int(st.get("num_blocked_filtering") or 0)
@@ -234,29 +352,34 @@ class AdGuardClient:
             elif isinstance(sv, list):
                 result["blocked_service_ids"] = list(sv)
 
+        if result["online"]:
+            self._overview_cache = (time.monotonic(), dict(result))
         return result
 
     async def toggle_feature(self, feature: str, enabled: bool) -> Dict[str, Any]:
+        await self._require_session()
         async with self._make_client() as client:
             if feature == "protection":
-                resp = await client.post("/control/protection", json={"enabled": enabled})
+                resp = await self._request(client, "post", "/control/protection", json={"enabled": enabled})
             elif feature == "adblock":
-                f_resp = await client.get("/control/filtering/status")
+                f_resp = await self._request(client, "get", "/control/filtering/status")
                 interval = 24
                 if f_resp.status_code == 200:
                     interval = int(f_resp.json().get("interval") or 24)
-                resp = await client.post(
+                resp = await self._request(
+                    client,
+                    "post",
                     "/control/filtering/config",
                     json={"enabled": enabled, "interval": interval},
                 )
             elif feature == "malware":
                 ep = "enable" if enabled else "disable"
-                resp = await client.post(f"/control/safebrowsing/{ep}")
+                resp = await self._request(client, "post", f"/control/safebrowsing/{ep}")
             elif feature == "parental":
                 ep = "enable" if enabled else "disable"
-                resp = await client.post(f"/control/parental/{ep}")
+                resp = await self._request(client, "post", f"/control/parental/{ep}")
             elif feature == "safesearch":
-                ss_resp = await client.get("/control/safesearch/status")
+                ss_resp = await self._request(client, "get", "/control/safesearch/status")
                 payload = (
                     ss_resp.json()
                     if ss_resp.status_code == 200
@@ -274,44 +397,50 @@ class AdGuardClient:
                 if enabled:
                     for key in ("bing", "duckduckgo", "ecosia", "google", "pixabay", "yandex", "youtube"):
                         payload[key] = True
-                resp = await client.put("/control/safesearch/settings", json=payload)
+                resp = await self._request(client, "put", "/control/safesearch/settings", json=payload)
                 if resp.status_code in (404, 405):
                     ep = "enable" if enabled else "disable"
-                    resp = await client.post(f"/control/safesearch/{ep}")
+                    resp = await self._request(client, "post", f"/control/safesearch/{ep}")
             elif feature == "doh":
-                info_resp = await client.get("/control/dns_info")
+                info_resp = await self._request(client, "get", "/control/dns_info")
                 if info_resp.status_code != 200:
                     raise AdGuardError("Failed to fetch dns_info")
                 cfg = info_resp.json()
                 provider = _detect_provider(cfg.get("upstream_dns") or [])
                 cfg["upstream_dns"] = _build_upstreams(provider, enabled)
-                resp = await client.post("/control/dns_config", json=cfg)
+                resp = await self._request(client, "post", "/control/dns_config", json=cfg)
             else:
                 raise ValueError(f"Unsupported feature: {feature}")
 
             if resp.status_code not in (200, 204):
                 raise AdGuardError(f"AdGuard returned HTTP {resp.status_code}")
 
+        self.invalidate_cache()
         return {"success": True, "feature": feature, "enabled": enabled}
 
     async def pause_protection(self, minutes: int) -> Dict[str, Any]:
+        await self._require_session()
         duration_ms = minutes * 60 * 1000
         async with self._make_client() as client:
-            resp = await client.post(
+            resp = await self._request(
+                client,
+                "post",
                 "/control/protection",
                 json={"enabled": False, "duration": duration_ms},
             )
             if resp.status_code not in (200, 204):
-                resp = await client.post("/control/protection", json={"enabled": False})
+                resp = await self._request(client, "post", "/control/protection", json={"enabled": False})
                 if resp.status_code not in (200, 204):
                     raise AdGuardError(f"Failed to pause protection: HTTP {resp.status_code}")
+        self.invalidate_cache()
         return {"success": True, "paused": True, "minutes": minutes, "duration_ms": duration_ms}
 
     async def set_upstream(self, provider: str) -> Dict[str, Any]:
         if provider not in UPSTREAM_PRESETS:
             raise ValueError(f"Unknown upstream provider: {provider}")
+        await self._require_session()
         async with self._make_client() as client:
-            info_resp = await client.get("/control/dns_info")
+            info_resp = await self._request(client, "get", "/control/dns_info")
             if info_resp.status_code != 200:
                 raise AdGuardError("Failed to fetch dns_info")
             cfg = info_resp.json()
@@ -320,9 +449,10 @@ class AdGuardClient:
             new_upstreams = _build_upstreams(provider, doh_enabled)
             cfg["upstream_dns"] = new_upstreams
             cfg["bootstrap_dns"] = ["1.1.1.1", "9.9.9.9"]
-            resp = await client.post("/control/dns_config", json=cfg)
+            resp = await self._request(client, "post", "/control/dns_config", json=cfg)
             if resp.status_code not in (200, 204):
                 raise AdGuardError(f"Failed to update dns_config: HTTP {resp.status_code}")
+        self.invalidate_cache()
         return {"success": True, "provider": provider, "upstream_dns": new_upstreams}
 
     async def probe_doh_latencies(self, force: bool = False) -> Dict[str, Optional[float]]:
@@ -371,10 +501,11 @@ class AdGuardClient:
         if status_filter == "blocked":
             params["response_status"] = "filtered"
 
+        await self._require_session()
         async with self._make_client() as client:
             r_log, r_filt = await asyncio.gather(
-                client.get("/control/querylog", params=params),
-                client.get("/control/filtering/status"),
+                self._request(client, "get", "/control/querylog", params=params),
+                self._request(client, "get", "/control/filtering/status"),
                 return_exceptions=True,
             )
 
@@ -472,15 +603,17 @@ class AdGuardClient:
         return {"success": True, "logs": logs, "total": len(logs)}
 
     async def _set_user_rules(self, client: httpx.AsyncClient, rules: List[str]) -> None:
-        resp = await client.post("/control/filtering/set_rules", json={"rules": rules})
+        resp = await self._request(client, "post", "/control/filtering/set_rules", json={"rules": rules})
         if resp.status_code not in (200, 204):
             raise AdGuardError(f"Failed to set filtering rules: HTTP {resp.status_code}")
+        self.invalidate_cache()
 
     async def block_domain(self, domain: str) -> Dict[str, Any]:
+        await self._require_session()
         rule = f"||{domain}^"
         allow_variants = {f"@@||{domain}^", f"@@||{domain}^|"}
         async with self._make_client() as client:
-            filt_resp = await client.get("/control/filtering/status")
+            filt_resp = await self._request(client, "get", "/control/filtering/status")
             if filt_resp.status_code != 200:
                 raise AdGuardError("Failed to fetch filtering status")
             rules = [str(r) for r in (filt_resp.json().get("user_rules") or [])]
@@ -492,10 +625,11 @@ class AdGuardClient:
 
     async def unblock_domain(self, domain: str) -> Dict[str, Any]:
         """Smart unblock: remove user block rule OR add @@||domain^ exception if blocked by filter list."""
+        await self._require_session()
         block_variants = {f"||{domain}^", domain}
         allow_rule = f"@@||{domain}^"
         async with self._make_client() as client:
-            filt_resp = await client.get("/control/filtering/status")
+            filt_resp = await self._request(client, "get", "/control/filtering/status")
             if filt_resp.status_code != 200:
                 raise AdGuardError("Failed to fetch filtering status")
             rules = [str(r) for r in (filt_resp.json().get("user_rules") or [])]
@@ -514,13 +648,15 @@ class AdGuardClient:
         return {"success": True, "domain": domain, "rule": applied_rule, "action": action}
 
     async def get_rules(self) -> List[str]:
+        await self._require_session()
         async with self._make_client() as client:
-            resp = await client.get("/control/filtering/status")
+            resp = await self._request(client, "get", "/control/filtering/status")
             if resp.status_code != 200:
                 raise AdGuardError("Failed to fetch filtering rules")
             return [str(r) for r in (resp.json().get("user_rules") or [])]
 
     async def add_rule(self, domain: str, mode: str) -> Dict[str, Any]:
+        await self._require_session()
         if mode == "allow":
             rule = f"@@||{domain}^"
             remove_set = {f"||{domain}^", domain}
@@ -529,7 +665,7 @@ class AdGuardClient:
             remove_set = {f"@@||{domain}^", f"@@||{domain}^|"}
 
         async with self._make_client() as client:
-            resp = await client.get("/control/filtering/status")
+            resp = await self._request(client, "get", "/control/filtering/status")
             if resp.status_code != 200:
                 raise AdGuardError("Failed to fetch filtering rules")
             rules = [str(r) for r in (resp.json().get("user_rules") or [])]
@@ -540,9 +676,10 @@ class AdGuardClient:
         return {"success": True, "rule": rule, "rules": updated}
 
     async def delete_rule(self, rule: str) -> Dict[str, Any]:
+        await self._require_session()
         target = rule.strip()
         async with self._make_client() as client:
-            resp = await client.get("/control/filtering/status")
+            resp = await self._request(client, "get", "/control/filtering/status")
             if resp.status_code != 200:
                 raise AdGuardError("Failed to fetch filtering rules")
             rules = [str(r) for r in (resp.json().get("user_rules") or [])]
@@ -550,11 +687,17 @@ class AdGuardClient:
             await self._set_user_rules(client, updated)
         return {"success": True, "removed": target, "rules": updated}
 
-    async def get_blocked_services(self) -> Dict[str, Any]:
+    async def get_blocked_services(self, *, force: bool = False) -> Dict[str, Any]:
+        now = time.monotonic()
+        cached_ts, cached_data = self._services_cache
+        if not force and cached_data is not None and (now - cached_ts) < 5.0:
+            return dict(cached_data)
+
+        await self._require_session()
         async with self._make_client() as client:
             r_all, r_get = await asyncio.gather(
-                client.get("/control/blocked_services/all"),
-                client.get("/control/blocked_services/get"),
+                self._request(client, "get", "/control/blocked_services/all"),
+                self._request(client, "get", "/control/blocked_services/get"),
                 return_exceptions=True,
             )
 
@@ -584,42 +727,52 @@ class AdGuardClient:
                         "blocked": sid in active_set,
                     }
                 )
-        return {"services": services, "active_ids": active_ids}
+        payload = {"services": services, "active_ids": active_ids}
+        self._services_cache = (time.monotonic(), payload)
+        return payload
 
     async def set_blocked_services(self, ids: List[str]) -> Dict[str, Any]:
+        await self._require_session()
         async with self._make_client() as client:
-            r_get = await client.get("/control/blocked_services/get")
+            r_get = await self._request(client, "get", "/control/blocked_services/get")
             schedule = {"time_zone": "UTC"}
             if r_get.status_code == 200 and isinstance(r_get.json(), dict):
                 schedule = r_get.json().get("schedule") or schedule
-            resp = await client.put(
+            resp = await self._request(
+                client,
+                "put",
                 "/control/blocked_services/update",
                 json={"ids": ids, "schedule": schedule},
             )
             if resp.status_code in (404, 405):
-                resp = await client.post("/control/blocked_services/set", json=ids)
+                resp = await self._request(client, "post", "/control/blocked_services/set", json=ids)
             if resp.status_code not in (200, 204):
                 raise AdGuardError(f"Failed to update blocked services: HTTP {resp.status_code}")
+        self.invalidate_cache()
         return {"success": True, "ids": ids}
 
     async def refresh_filters(self) -> Dict[str, Any]:
+        await self._require_session()
         async with self._make_client(timeout=15.0) as client:
-            resp = await client.post("/control/filtering/refresh", json={"whitelist": False})
+            resp = await self._request(client, "post", "/control/filtering/refresh", json={"whitelist": False})
             if resp.status_code not in (200, 204):
                 raise AdGuardError(f"Failed to refresh filters: HTTP {resp.status_code}")
             updated = resp.json().get("updated", 0) if resp.content else 0
+        self.invalidate_cache()
         return {"success": True, "updated": updated}
 
     async def clear_cache(self) -> Dict[str, Any]:
+        await self._require_session()
         async with self._make_client() as client:
-            resp = await client.post("/control/cache_clear")
+            resp = await self._request(client, "post", "/control/cache_clear")
             if resp.status_code not in (200, 204):
                 raise AdGuardError(f"Failed to clear DNS cache: HTTP {resp.status_code}")
         return {"success": True}
 
     async def get_rewrites(self) -> List[Dict[str, str]]:
+        await self._require_session()
         async with self._make_client() as client:
-            resp = await client.get("/control/rewrite/list")
+            resp = await self._request(client, "get", "/control/rewrite/list")
             if resp.status_code != 200:
                 raise AdGuardError("Failed to fetch DNS rewrites")
             return [
@@ -628,15 +781,17 @@ class AdGuardClient:
             ]
 
     async def add_rewrite(self, domain: str, answer: str) -> Dict[str, Any]:
+        await self._require_session()
         async with self._make_client() as client:
-            resp = await client.post("/control/rewrite/add", json={"domain": domain, "answer": answer})
+            resp = await self._request(client, "post", "/control/rewrite/add", json={"domain": domain, "answer": answer})
             if resp.status_code not in (200, 204):
                 raise AdGuardError(f"Failed to add DNS rewrite: HTTP {resp.status_code}")
         return {"success": True, "domain": domain, "answer": answer}
 
     async def delete_rewrite(self, domain: str, answer: str) -> Dict[str, Any]:
+        await self._require_session()
         async with self._make_client() as client:
-            resp = await client.post("/control/rewrite/delete", json={"domain": domain, "answer": answer})
+            resp = await self._request(client, "post", "/control/rewrite/delete", json={"domain": domain, "answer": answer})
             if resp.status_code not in (200, 204):
                 raise AdGuardError(f"Failed to delete DNS rewrite: HTTP {resp.status_code}")
         return {"success": True, "domain": domain, "answer": answer}

@@ -1,7 +1,9 @@
 """Unit and API tests for VPN Controler."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
+import httpx
 import pytest
 
 from app.main import app
@@ -207,3 +209,143 @@ def test_api_services_and_rewrites_endpoints():
 
     r_bad = client.post("/api/dns/rewrites", json={"domain": "bad host", "answer": "192.168.178.65"})
     assert r_bad.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_adguard_session_login_singleflight_and_cookie_client():
+    ag = AdGuardClient()
+    login_calls = 0
+    seen_auth_headers = []
+    seen_cookies = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal login_calls
+        if request.url.path == "/control/login":
+            login_calls += 1
+            await asyncio.sleep(0.02)
+            return httpx.Response(
+                200,
+                headers={"Set-Cookie": "agh_session=tok123; Path=/; HttpOnly"},
+                json={},
+            )
+        seen_auth_headers.append(request.headers.get("authorization"))
+        seen_cookies.append(request.headers.get("cookie", ""))
+        return httpx.Response(200, json={"running": True, "protection_enabled": True})
+
+    real_async_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+
+    def client_with_transport(*args, **kwargs):
+        kwargs["transport"] = transport
+        return real_async_client(*args, **kwargs)
+
+    with patch("app.services.adguard.settings.ADGUARD_PASSWORD", "test-secret"), \
+         patch("app.services.adguard.httpx.AsyncClient", side_effect=client_with_transport):
+        results = await asyncio.gather(
+            ag._ensure_session(),
+            ag._ensure_session(),
+            ag._ensure_session(),
+        )
+        assert results == [True, True, True]
+        assert login_calls == 1
+        assert ag._session_cookie == "tok123"
+
+        async_client = ag._make_client()
+        try:
+            assert async_client.auth is None
+            assert async_client.cookies.get("agh_session") == "tok123"
+        finally:
+            await async_client.aclose()
+
+        assert await ag.check_health() is True
+
+    assert login_calls == 1
+    assert seen_auth_headers == [None]
+    assert seen_cookies == ["agh_session=tok123"]
+
+
+@pytest.mark.asyncio
+async def test_adguard_401_triggers_relogin_and_retry():
+    ag = AdGuardClient()
+    ag._session_cookie = "expired_tok"
+    login_calls = 0
+    status_attempts = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal login_calls, status_attempts
+        if request.url.path == "/control/login":
+            login_calls += 1
+            await asyncio.sleep(0.01)
+            return httpx.Response(
+                200,
+                headers={"Set-Cookie": "agh_session=fresh_tok; Path=/; HttpOnly"},
+                json={},
+            )
+        assert request.headers.get("authorization") is None
+        cookie = request.headers.get("cookie", "")
+        if request.url.path == "/control/status":
+            status_attempts += 1
+            if "agh_session=expired_tok" in cookie:
+                return httpx.Response(401)
+            if "agh_session=fresh_tok" in cookie:
+                return httpx.Response(200, json={"running": True, "protection_enabled": True})
+        return httpx.Response(404)
+
+    real_async_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+
+    def client_with_transport(*args, **kwargs):
+        kwargs["transport"] = transport
+        return real_async_client(*args, **kwargs)
+
+    with patch("app.services.adguard.settings.ADGUARD_PASSWORD", "test-secret"), \
+         patch("app.services.adguard.httpx.AsyncClient", side_effect=client_with_transport):
+        async with ag._make_client() as http_client:
+            r1, r2 = await asyncio.gather(
+                ag._request(http_client, "get", "/control/status"),
+                ag._request(http_client, "get", "/control/status"),
+            )
+
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+    assert login_calls == 1
+    assert status_attempts == 4
+    assert ag._session_cookie == "fresh_tok"
+
+
+@pytest.mark.asyncio
+async def test_adguard_overview_and_tailscale_short_ttl_caches():
+    ag = AdGuardClient()
+    ag._session_cookie = "tok123"
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"running": True, "protection_enabled": True})
+
+    real_async_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+
+    def client_with_transport(*args, **kwargs):
+        kwargs["transport"] = transport
+        return real_async_client(*args, **kwargs)
+
+    with patch("app.services.adguard.settings.ADGUARD_PASSWORD", "test-secret"), \
+         patch("app.services.adguard.httpx.AsyncClient", side_effect=client_with_transport):
+        ov1 = await ag.get_overview()
+        first_batch_calls = calls
+        assert ov1["online"] is True
+        assert first_batch_calls == 8
+
+        # Second call within 2.5s should hit the in-memory cache (0 new HTTP calls)
+        ov2 = await ag.get_overview()
+        assert ov2["online"] is True
+        assert calls == first_batch_calls
+
+        # Invalidation clears the cache so the next call fetches fresh data
+        ag.invalidate_cache()
+        ov3 = await ag.get_overview()
+        assert ov3["online"] is True
+        assert calls == first_batch_calls * 2
+

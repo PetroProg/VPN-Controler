@@ -6,7 +6,7 @@ services:
     container_name: vpn-controler
     restart: unless-stopped
     ports:
-      - "8086:8086"
+      - "127.0.0.1:8086:8086"
     env_file:
       - .env
     environment:
@@ -36,7 +36,8 @@ services:
       - "192.168.178.65:53:53/tcp"
       - "100.107.4.120:53:53/udp"
       - "100.107.4.120:53:53/tcp"
-      - "3053:3000/tcp"
+      - "127.0.0.1:3053:3000/tcp"
+      - "100.107.4.120:3053:3000/tcp"
     volumes:
       - ./adguard/work:/opt/adguardhome/work
       - ./adguard/conf:/opt/adguardhome/conf

@@ -1,6 +1,7 @@
 /* Settings page (Page 2: Настройки — Themes, Behavior, AdGuard Admin, Node & PWA) */
 
 import { apiDelete, apiGet, apiPost } from '../core/api.js';
+import { clearPageCache, isCacheFresh, readPageCache, writePageCache } from '../core/cache.js';
 import {
   THEMES,
   applyI18n,
@@ -165,23 +166,88 @@ function renderNodeInfo() {
   document.getElementById('open-adguard-link').href = `http://${host}:${adgPort}`;
 }
 
-async function loadSettingsData() {
+function hydrateSettingsFromCache() {
+  const cached = readPageCache();
+  if (!cached) return { hasCache: false, isFresh: false };
+
+  let hasAny = false;
+  if (cached.meta) {
+    state.meta = cached.meta;
+    hasAny = true;
+  }
+  if (cached.vpn) {
+    state.vpn = cached.vpn;
+    hasAny = true;
+  }
+  if (cached.overview) {
+    state.overview = cached.overview;
+    state.filters = cached.overview.filters || state.filters;
+    if (Array.isArray(cached.overview.user_rules) && !Array.isArray(cached.rules)) {
+      state.rules = cached.overview.user_rules;
+    }
+    hasAny = true;
+  }
+  if (Array.isArray(cached.rules)) {
+    state.rules = cached.rules;
+    hasAny = true;
+  }
+  if (Array.isArray(cached.rewrites)) {
+    state.rewrites = cached.rewrites;
+    hasAny = true;
+  }
+
+  if (hasAny) {
+    renderNodeInfo();
+    renderAdguardAdmin();
+  }
+
+  const isFresh = isCacheFresh(cached, ['meta', 'vpn', 'overview', 'rules', 'rewrites'], 20000);
+  return { hasCache: hasAny, isFresh };
+}
+
+async function loadSettingsData(force = false) {
+  const cached = readPageCache() || {};
+  const needMeta = force || !isCacheFresh(cached, ['meta'], 60000);
+  const needVpn = force || !isCacheFresh(cached, ['vpn'], 15000);
+  const needOverview = force || !isCacheFresh(cached, ['overview'], 15000);
+  const needRules = force || (!isCacheFresh(cached, ['rules'], 15000) && !(state.overview && Array.isArray(state.overview.user_rules)));
+  const needRewrites = force || !isCacheFresh(cached, ['rewrites'], 30000);
+
   const [metaRes, vpnRes, ovRes, rulesRes, rwRes] = await Promise.allSettled([
-    apiGet('/api/meta'),
-    apiGet('/api/vpn/status'),
-    apiGet('/api/dns/overview'),
-    apiGet('/api/dns/rules'),
-    apiGet('/api/dns/rewrites'),
+    needMeta ? apiGet('/api/meta') : Promise.resolve(state.meta),
+    needVpn ? apiGet('/api/vpn/status') : Promise.resolve(state.vpn),
+    needOverview ? apiGet('/api/dns/overview') : Promise.resolve(state.overview),
+    needRules ? apiGet('/api/dns/rules') : Promise.resolve({ rules: state.rules }),
+    needRewrites ? apiGet('/api/dns/rewrites') : Promise.resolve({ rewrites: state.rewrites }),
   ]);
 
-  if (metaRes.status === 'fulfilled') state.meta = metaRes.value;
-  if (vpnRes.status === 'fulfilled') state.vpn = vpnRes.value;
-  if (ovRes.status === 'fulfilled') {
+  const patch = {};
+  if (metaRes.status === 'fulfilled' && metaRes.value) {
+    state.meta = metaRes.value;
+    if (needMeta) patch.meta = metaRes.value;
+  }
+  if (vpnRes.status === 'fulfilled' && vpnRes.value) {
+    state.vpn = vpnRes.value;
+    if (needVpn) patch.vpn = vpnRes.value;
+  }
+  if (ovRes.status === 'fulfilled' && ovRes.value) {
     state.overview = ovRes.value;
     state.filters = ovRes.value.filters || [];
+    if (Array.isArray(ovRes.value.user_rules) && !needRules && !state.rules.length) {
+      state.rules = ovRes.value.user_rules;
+      patch.rules = state.rules;
+    }
+    if (needOverview) patch.overview = ovRes.value;
   }
-  if (rulesRes.status === 'fulfilled') state.rules = rulesRes.value.rules || [];
-  if (rwRes.status === 'fulfilled') state.rewrites = rwRes.value.rewrites || [];
+  if (rulesRes.status === 'fulfilled' && rulesRes.value && Array.isArray(rulesRes.value.rules)) {
+    state.rules = rulesRes.value.rules;
+    if (needRules) patch.rules = state.rules;
+  }
+  if (rwRes.status === 'fulfilled' && rwRes.value && Array.isArray(rwRes.value.rewrites)) {
+    state.rewrites = rwRes.value.rewrites;
+    if (needRewrites) patch.rewrites = state.rewrites;
+  }
+  if (Object.keys(patch).length) writePageCache(patch);
 
   renderNodeInfo();
   renderAdguardAdmin();
@@ -203,6 +269,8 @@ async function submitUserRule(mode) {
     const res = await apiPost('/api/dns/rules', { domain, mode });
     inp.value = '';
     state.rules = res.rules || state.rules;
+    if (state.overview) state.overview.user_rules = state.rules;
+    writePageCache({ rules: state.rules, ...(state.overview ? { overview: state.overview } : {}) });
     renderAdguardAdmin();
     showToast(`Добавлено: ${res.rule}`, mode === 'allow' ? 'ok' : 'warn');
   } catch (err) {
@@ -221,7 +289,9 @@ document.getElementById('refresh-filters-btn').addEventListener('click', async (
   try {
     await apiPost('/api/dns/filters/refresh', {});
     const ov = await apiGet('/api/dns/overview');
+    state.overview = ov;
     state.filters = ov.filters || [];
+    writePageCache({ overview: ov });
     renderAdguardAdmin();
     showToast('Подписки фильтров обновлены', 'ok');
   } catch (err) {
@@ -252,6 +322,7 @@ document.getElementById('rewrite-add-btn').addEventListener('click', async () =>
     domInp.value = '';
     const rw = await apiGet('/api/dns/rewrites');
     state.rewrites = rw.rewrites || [];
+    writePageCache({ rewrites: state.rewrites });
     renderAdguardAdmin();
     showToast(`Добавлено: ${domain} → ${answer}`, 'ok');
   } catch (err) {
@@ -261,6 +332,7 @@ document.getElementById('rewrite-add-btn').addEventListener('click', async () =>
 
 document.getElementById('sw-reset-btn').addEventListener('click', async () => {
   try {
+    clearPageCache();
     if ('caches' in window) {
       const keys = await caches.keys();
       await Promise.all(keys.map((k) => caches.delete(k)));
@@ -344,6 +416,8 @@ document.querySelector('main').addEventListener('click', async (e) => {
     try {
       const res = await apiDelete('/api/dns/rules', { rule });
       state.rules = res.rules || state.rules.filter((r) => r !== rule);
+      if (state.overview) state.overview.user_rules = state.rules;
+      writePageCache({ rules: state.rules, ...(state.overview ? { overview: state.overview } : {}) });
       renderAdguardAdmin();
       showToast(`Удалено: ${rule}`, 'info');
     } catch (err) {
@@ -359,6 +433,7 @@ document.querySelector('main').addEventListener('click', async (e) => {
     try {
       await apiDelete('/api/dns/rewrites', { domain: rw.domain, answer: rw.answer });
       state.rewrites = state.rewrites.filter((x) => !(x.domain === rw.domain && x.answer === rw.answer));
+      writePageCache({ rewrites: state.rewrites });
       renderAdguardAdmin();
       showToast(`Удалено: ${rw.domain}`, 'info');
     } catch (err) {
@@ -376,4 +451,5 @@ applyI18n(cfg.lang);
 renderPreferences();
 updateClock();
 setInterval(updateClock, 1000);
+hydrateSettingsFromCache();
 loadSettingsData();

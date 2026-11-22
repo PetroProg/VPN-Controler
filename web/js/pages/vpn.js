@@ -1,6 +1,7 @@
 /* Main page (Page 1: Главная — Shield-First + 3 Segments) */
 
 import { apiGet, apiPost, apiPut } from '../core/api.js';
+import { isCacheFresh, readPageCache, writePageCache } from '../core/cache.js';
 import { applyI18n, applyThemeAndDensity, getSettings, t } from '../core/settings.js';
 import {
   copyToClipboard,
@@ -552,8 +553,16 @@ async function loadVpnStatusAndTraffic() {
     apiGet('/api/vpn/status'),
     apiGet('/api/vpn/traffic'),
   ]);
-  if (vpnRes.status === 'fulfilled') state.vpn = vpnRes.value;
-  if (trafRes.status === 'fulfilled') state.traffic = trafRes.value;
+  const patch = {};
+  if (vpnRes.status === 'fulfilled') {
+    state.vpn = vpnRes.value;
+    patch.vpn = vpnRes.value;
+  }
+  if (trafRes.status === 'fulfilled') {
+    state.traffic = trafRes.value;
+    patch.traffic = trafRes.value;
+  }
+  if (Object.keys(patch).length) writePageCache(patch);
 }
 
 async function loadOverviewAndLogs() {
@@ -567,15 +576,21 @@ async function loadOverviewAndLogs() {
     apiGet('/api/dns/overview'),
     apiGet(`/api/dns/querylog?${q.toString()}`),
   ]);
+  const patch = {};
   if (ovRes.status === 'fulfilled') {
     state.overview = ovRes.value;
+    patch.overview = ovRes.value;
     const durMs = Number(ovRes.value.protection_disabled_duration_ms || 0);
     state.pauseRemainingSec = !ovRes.value.protection && durMs > 0 ? Math.ceil(durMs / 1000) : 0;
   }
   if (logRes.status === 'fulfilled' && Array.isArray(logRes.value.logs)) {
     state.logs = logRes.value.logs;
+    if (state.logStatus === 'all' && !state.logSearch.trim() && state.logClient === 'all') {
+      patch.logs = logRes.value.logs;
+    }
     updateClientDropdown();
   }
+  if (Object.keys(patch).length) writePageCache(patch);
 }
 
 async function loadServicesAndLatencies(forceProbe = false) {
@@ -583,13 +598,84 @@ async function loadServicesAndLatencies(forceProbe = false) {
     apiGet('/api/dns/services'),
     apiGet(`/api/dns/doh-latency?force=${forceProbe ? 'true' : 'false'}`),
   ]);
+  const patch = {};
   if (svcRes.status === 'fulfilled' && Array.isArray(svcRes.value.services)) {
     state.services = svcRes.value.services;
     state.activeServiceIds = svcRes.value.active_ids || [];
+    patch.services = state.services;
+    patch.activeServiceIds = state.activeServiceIds;
   }
   if (latRes.status === 'fulfilled' && latRes.value.latencies) {
     state.dohLatencies = latRes.value.latencies;
+    patch.dohLatencies = state.dohLatencies;
   }
+  if (Object.keys(patch).length) writePageCache(patch);
+}
+
+function renderAllViews() {
+  renderHeaderAndHero();
+  renderKpis();
+  renderNetworkSegment();
+  renderDnsLogSegment();
+  renderShieldSegment();
+}
+
+function hydrateFromCache() {
+  const cached = readPageCache();
+  if (!cached) return { hasCache: false, isFresh: false, servicesFresh: false };
+
+  let hasAny = false;
+  if (cached.segment && ['network', 'dnslog', 'shield'].includes(cached.segment)) {
+    state.segment = cached.segment;
+  }
+  if (cached.chartMode && ['mesh', 'dns24'].includes(cached.chartMode)) {
+    state.chartMode = cached.chartMode;
+  }
+  if (cached.topMode && ['domains', 'clients'].includes(cached.topMode)) {
+    state.topMode = cached.topMode;
+  }
+  if (cached.vpn) {
+    state.vpn = cached.vpn;
+    hasAny = true;
+  }
+  if (cached.traffic) {
+    state.traffic = cached.traffic;
+    hasAny = true;
+  }
+  if (cached.overview) {
+    state.overview = cached.overview;
+    const durMs = Number(cached.overview.protection_disabled_duration_ms || 0);
+    const elapsedSec = cached.timestamps && cached.timestamps.overview
+      ? Math.max(0, Math.floor((Date.now() - cached.timestamps.overview) / 1000))
+      : 0;
+    state.pauseRemainingSec = !cached.overview.protection && durMs > 0
+      ? Math.max(0, Math.ceil(durMs / 1000) - elapsedSec)
+      : 0;
+    hasAny = true;
+  }
+  if (Array.isArray(cached.logs)) {
+    state.logs = cached.logs;
+    updateClientDropdown();
+    hasAny = true;
+  }
+  if (Array.isArray(cached.services)) {
+    state.services = cached.services;
+    state.activeServiceIds = cached.activeServiceIds || cached.services.filter((s) => s.blocked).map((s) => s.id);
+    hasAny = true;
+  }
+  if (cached.dohLatencies && typeof cached.dohLatencies === 'object') {
+    state.dohLatencies = cached.dohLatencies;
+  }
+
+  if (hasAny) {
+    renderSegmentsNav();
+    renderAllViews();
+  }
+
+  const freshTtl = cfg.refreshMs > 0 ? Math.max(cfg.refreshMs, 10000) : 30000;
+  const isFresh = isCacheFresh(cached, ['vpn', 'traffic', 'overview', 'logs'], freshTtl);
+  const servicesFresh = isCacheFresh(cached, ['services', 'dohLatencies'], 60000);
+  return { hasCache: hasAny, isFresh, servicesFresh };
 }
 
 async function refreshAll(includeLatencies = false) {
@@ -601,11 +687,7 @@ async function refreshAll(includeLatencies = false) {
       loadOverviewAndLogs(),
       includeLatencies ? loadServicesAndLatencies(false) : Promise.resolve(),
     ]);
-    renderHeaderAndHero();
-    renderKpis();
-    renderNetworkSegment();
-    renderDnsLogSegment();
-    renderShieldSegment();
+    renderAllViews();
   } finally {
     state.isPolling = false;
   }
@@ -713,6 +795,7 @@ document.getElementById('probe-doh-btn').addEventListener('click', async () => {
   try {
     const res = await apiGet('/api/dns/doh-latency?force=true');
     state.dohLatencies = res.latencies || {};
+    writePageCache({ dohLatencies: state.dohLatencies });
     renderShieldSegment();
     showToast('Пинг DoH шлюзов замерен', 'ok');
   } catch (err) {
@@ -740,6 +823,7 @@ document.querySelector('main').addEventListener('click', async (e) => {
   const segBtn = tEl.closest('[data-segment]');
   if (segBtn) {
     state.segment = segBtn.dataset.segment;
+    writePageCache({ segment: state.segment });
     renderSegmentsNav();
     return;
   }
@@ -747,6 +831,7 @@ document.querySelector('main').addEventListener('click', async (e) => {
   const chartModeBtn = tEl.closest('[data-chart-mode]');
   if (chartModeBtn) {
     state.chartMode = chartModeBtn.dataset.chartMode;
+    writePageCache({ chartMode: state.chartMode });
     renderNetworkSegment();
     return;
   }
@@ -754,6 +839,7 @@ document.querySelector('main').addEventListener('click', async (e) => {
   const topModeBtn = tEl.closest('[data-top-mode]');
   if (topModeBtn) {
     state.topMode = topModeBtn.dataset.topMode;
+    writePageCache({ topMode: state.topMode });
     renderNetworkSegment();
     return;
   }
@@ -774,6 +860,7 @@ document.querySelector('main').addEventListener('click', async (e) => {
           peer.ping_ms = res.latency_ms;
           peer.mode = res.mode;
           peer.direct = res.direct;
+          writePageCache({ vpn: state.vpn });
         }
         renderNetworkSegment();
         showToast(`Пинг ${ip}: ${res.latency_ms} ms (${res.mode})`, 'ok');
@@ -861,6 +948,7 @@ document.querySelector('main').addEventListener('click', async (e) => {
       await apiPost('/api/dns/toggle', { feature, enabled: nextVal });
       if (state.overview && state.overview.toggles) {
         state.overview.toggles[feature] = nextVal;
+        writePageCache({ overview: state.overview });
       }
       renderShieldSegment();
       showToast(`Модуль обновлён: ${nextVal ? 'Вкл' : 'Выкл'}`, nextVal ? 'ok' : 'info');
@@ -875,7 +963,10 @@ document.querySelector('main').addEventListener('click', async (e) => {
     const provider = dohBtn.dataset.dohId;
     try {
       await apiPost('/api/dns/upstream', { provider });
-      if (state.overview) state.overview.provider = provider;
+      if (state.overview) {
+        state.overview.provider = provider;
+        writePageCache({ overview: state.overview });
+      }
       renderKpis();
       renderShieldSegment();
       showToast(`Активный шлюз: ${provider}`, 'ok');
@@ -897,6 +988,7 @@ document.querySelector('main').addEventListener('click', async (e) => {
       await apiPut('/api/dns/services', { ids: nextIds });
       state.activeServiceIds = nextIds;
       state.services = state.services.map((s) => ({ ...s, blocked: currentSet.has(s.id) }));
+      writePageCache({ services: state.services, activeServiceIds: state.activeServiceIds });
       renderShieldSegment();
       showToast(`${sid}: ${willBlock ? 'заблокирован' : 'разблокирован'}`, willBlock ? 'warn' : 'ok');
     } catch (err) {
@@ -910,6 +1002,11 @@ window.addEventListener('themechange', () => requestAnimationFrame(drawTelemetry
 
 applyI18n(cfg.lang);
 renderSegmentsNav();
+const cacheStatus = hydrateFromCache();
 countdownTimer = setInterval(updatePauseCountdownTick, 1000);
-refreshAll(true);
+if (!cacheStatus.isFresh) {
+  refreshAll(!cacheStatus.servicesFresh);
+} else if (!cacheStatus.servicesFresh) {
+  loadServicesAndLatencies(false).then(() => renderShieldSegment());
+}
 setupRefreshLoop();

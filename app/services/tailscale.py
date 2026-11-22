@@ -68,6 +68,7 @@ class TailscaleClient:
     def __init__(self, sock_path: Optional[str] = None) -> None:
         self.sock_path = sock_path or settings.TAILSCALE_SOCK_PATH
         self._ping_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+        self._raw_status_cache: Tuple[float, Optional[Dict[str, Any]]] = (0.0, None)
         self._last_traffic: Optional[Tuple[float, int, int]] = None
         self._rx_history: Deque[float] = deque([0.0] * 24, maxlen=24)
         self._tx_history: Deque[float] = deque([0.0] * 24, maxlen=24)
@@ -81,14 +82,21 @@ class TailscaleClient:
             timeout=settings.TAILSCALE_TIMEOUT_SECONDS,
         )
 
-    async def _fetch_raw_status(self) -> Optional[Dict[str, Any]]:
+    async def _fetch_raw_status(self, *, force: bool = False) -> Optional[Dict[str, Any]]:
+        now = time.monotonic()
+        cached_ts, cached_data = self._raw_status_cache
+        if not force and cached_data is not None and (now - cached_ts) < 1.5:
+            return cached_data
+
         if not Path(self.sock_path).exists():
             return None
         try:
             async with self._make_client() as client:
                 resp = await client.get("/localapi/v0/status")
                 if resp.status_code == 200:
-                    return resp.json()
+                    payload = resp.json()
+                    self._raw_status_cache = (time.monotonic(), payload)
+                    return payload
         except Exception as exc:
             logger.warning("Tailscale status fetch failed: %s", exc)
         return None

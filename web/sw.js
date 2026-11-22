@@ -1,6 +1,6 @@
 /* VPN Controler Service Worker (Offline-ready App Shell + Network-First API) */
 
-const CACHE_VERSION = 'vc-v1.0.0';
+const CACHE_VERSION = 'vc-v1.1.0';
 const SHELL_CACHE = `vc-shell-${CACHE_VERSION}`;
 const API_CACHE = `vc-api-${CACHE_VERSION}`;
 
@@ -11,6 +11,7 @@ const PRECACHE_URLS = [
   '/css/themes.css',
   '/css/app.css',
   '/js/core/settings.js',
+  '/js/core/cache.js',
   '/js/core/api.js',
   '/js/core/ui.js',
   '/js/pages/vpn.js',
@@ -76,23 +77,26 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 2. HTML navigation: Network-First
+  // 2. HTML navigation: Stale-While-Revalidate (instant page switch)
   if (request.mode === 'navigate' || url.pathname === '/' || url.pathname === '/vpn' || url.pathname === '/settings') {
     event.respondWith(
       (async () => {
         const cache = await caches.open(SHELL_CACHE);
-        try {
-          const netResp = await fetch(request);
-          if (netResp && netResp.ok) {
-            cache.put(url.pathname === '/vpn' ? '/' : url.pathname, netResp.clone());
-          }
-          return netResp;
-        } catch (err) {
-          const fallbackUrl = url.pathname === '/settings' ? '/settings' : '/';
-          const cached = await cache.match(fallbackUrl);
-          if (cached) return cached;
-          return (await cache.match('/')) || new Response('Offline', { status: 503 });
-        }
+        const cacheKey = url.pathname === '/vpn' ? '/' : url.pathname;
+        const cached = await cache.match(cacheKey);
+        const netPromise = fetch(request)
+          .then((netResp) => {
+            if (netResp && netResp.ok) {
+              cache.put(cacheKey, netResp.clone());
+            }
+            return netResp;
+          })
+          .catch(() => null);
+
+        if (cached) return cached;
+        const netResp = await netPromise;
+        if (netResp) return netResp;
+        return (await cache.match('/')) || new Response('Offline', { status: 503 });
       })()
     );
     return;
