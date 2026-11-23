@@ -27,7 +27,7 @@ def test_html_and_pwa_routes():
     r_sw = client.get("/sw.js")
     assert r_sw.status_code == 200
     assert r_sw.headers.get("service-worker-allowed") == "/"
-    assert "vc-v1.2.0" in r_sw.text
+    assert "vc-v1.2.1" in r_sw.text
     assert "API_CACHE" not in r_sw.text
     assert "k.startsWith('vc-')" in r_sw.text
 
@@ -357,4 +357,87 @@ async def test_adguard_overview_and_tailscale_short_ttl_caches():
         ov3 = await ag.get_overview()
         assert ov3["online"] is True
         assert calls == first_batch_calls * 2
+
+
+@pytest.mark.asyncio
+async def test_blocked_services_syncs_enforced_important_rules_and_clears_cache():
+    ag = AdGuardClient()
+    ag._session_cookie = "tok123"
+    stored_rules = ["||custom-manual.test^", "@@||spotify.com^", "@@||jut.su^$important"]
+    stored_blocked_ids = []
+    cache_clear_calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal stored_rules, stored_blocked_ids, cache_clear_calls
+        path = request.url.path
+        if path == "/control/blocked_services/get":
+            return httpx.Response(200, json={"ids": stored_blocked_ids, "schedule": {"time_zone": "UTC"}})
+        if path == "/control/blocked_services/update":
+            import json
+            body = json.loads(request.content.decode())
+            stored_blocked_ids = list(body.get("ids") or [])
+            return httpx.Response(200, json={})
+        if path == "/control/filtering/status":
+            return httpx.Response(200, json={"enabled": True, "user_rules": list(stored_rules), "filters": []})
+        if path == "/control/filtering/set_rules":
+            import json
+            body = json.loads(request.content.decode())
+            stored_rules = list(body.get("rules") or [])
+            return httpx.Response(200, json={})
+        if path == "/control/cache_clear":
+            cache_clear_calls += 1
+            return httpx.Response(200, json={})
+        if path == "/control/querylog":
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "time": "2026-11-23T20:00:00Z",
+                            "question": {"name": "aggr32-normal.tiktokv.eu", "type": "A"},
+                            "client": "100.76.188.111",
+                            "reason": "FilteredBlackList",
+                            "rule": "||tiktokv.eu^$important",
+                            "elapsedMs": 1.2,
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(200, json={"running": True, "protection_enabled": True})
+
+    real_async_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+
+    def client_with_transport(*args, **kwargs):
+        kwargs["transport"] = transport
+        return real_async_client(*args, **kwargs)
+
+    with patch("app.services.adguard.settings.ADGUARD_PASSWORD", "test-secret"), \
+         patch("app.services.adguard.httpx.AsyncClient", side_effect=client_with_transport):
+        res = await ag.set_blocked_services(["tiktok", "spotify"])
+        assert res == {"success": True, "ids": ["tiktok", "spotify"]}
+        assert cache_clear_calls == 1
+        assert "||tiktokv.eu^$important" in stored_rules
+        assert "||byteeffecttos-g.com^$important" in stored_rules
+        assert "||tiktokcdn-eu.com^$important" in stored_rules
+        assert "||spotify.com^$important" in stored_rules
+        # Manual rules stay preserved in AdGuard
+        assert "||custom-manual.test^" in stored_rules
+        assert "@@||spotify.com^" in stored_rules
+        assert "@@||jut.su^$important" in stored_rules
+
+        # Visible user_rules in UI exclude managed service $important rules
+        visible = await ag.get_rules()
+        assert visible == ["||custom-manual.test^", "@@||spotify.com^", "@@||jut.su^$important"]
+
+        # Querylog classifies enforced service rule as blocked_service
+        qlog = await ag.get_querylog()
+        assert qlog["logs"][0]["source"] == "blocked_service"
+        assert qlog["logs"][0]["reason"] == "Блокировка сервиса"
+
+        # Unblocking services removes managed $important rules and preserves manual rules
+        await ag.set_blocked_services([])
+        assert cache_clear_calls == 2
+        assert stored_rules == ["||custom-manual.test^", "@@||spotify.com^", "@@||jut.su^$important"]
+
 

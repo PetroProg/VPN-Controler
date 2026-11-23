@@ -1,6 +1,6 @@
 /* VPN Controler Service Worker (Lightweight App Shell Only — Zero API Disk Cache) */
 
-const CACHE_VERSION = 'vc-v1.2.0';
+const CACHE_VERSION = 'vc-v1.2.1';
 const SHELL_CACHE = `vc-shell-${CACHE_VERSION}`;
 
 const PRECACHE_URLS = [

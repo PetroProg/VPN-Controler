@@ -582,6 +582,16 @@ async function loadOverviewAndLogs() {
     patch.overview = ovRes.value;
     const durMs = Number(ovRes.value.protection_disabled_duration_ms || 0);
     state.pauseRemainingSec = !ovRes.value.protection && durMs > 0 ? Math.ceil(durMs / 1000) : 0;
+    if (Array.isArray(ovRes.value.blocked_service_ids)) {
+      const activeIds = ovRes.value.blocked_service_ids.map((x) => String(x).toLowerCase());
+      const activeSet = new Set(activeIds);
+      state.activeServiceIds = activeIds;
+      patch.activeServiceIds = activeIds;
+      if (state.services.length) {
+        state.services = state.services.map((s) => ({ ...s, blocked: activeSet.has(s.id) }));
+        patch.services = state.services;
+      }
+    }
   }
   if (logRes.status === 'fulfilled' && Array.isArray(logRes.value.logs)) {
     state.logs = logRes.value.logs;
@@ -979,7 +989,11 @@ document.querySelector('main').addEventListener('click', async (e) => {
   const svcBtn = tEl.closest('[data-service-id]');
   if (svcBtn) {
     const sid = svcBtn.dataset.serviceId;
-    const currentSet = new Set(state.activeServiceIds);
+    const currentSet = new Set(
+      state.activeServiceIds && state.activeServiceIds.length
+        ? state.activeServiceIds
+        : state.services.filter((s) => s.blocked).map((s) => s.id),
+    );
     const willBlock = !currentSet.has(sid);
     if (willBlock) currentSet.add(sid);
     else currentSet.delete(sid);
@@ -988,7 +1002,14 @@ document.querySelector('main').addEventListener('click', async (e) => {
       await apiPut('/api/dns/services', { ids: nextIds });
       state.activeServiceIds = nextIds;
       state.services = state.services.map((s) => ({ ...s, blocked: currentSet.has(s.id) }));
-      writePageCache({ services: state.services, activeServiceIds: state.activeServiceIds });
+      if (state.overview) {
+        state.overview.blocked_service_ids = nextIds;
+      }
+      writePageCache({
+        services: state.services,
+        activeServiceIds: state.activeServiceIds,
+        ...(state.overview ? { overview: state.overview } : {}),
+      });
       renderShieldSegment();
       showToast(`${sid}: ${willBlock ? 'заблокирован' : 'разблокирован'}`, willBlock ? 'warn' : 'ok');
     } catch (err) {

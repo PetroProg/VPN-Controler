@@ -52,6 +52,192 @@ CURATED_SERVICES: List[str] = [
     "twitter",
 ]
 
+# Enforced $important domains per service to cover regional/EU failovers (e.g. tiktokv.eu,
+# byteeffecttos-g.com, tiktokcdn-eu.com) missing from AdGuard Home's built-in catalog
+# and to take precedence over non-important @@|| user exceptions while a service is blocked.
+SERVICE_ENFORCED_DOMAINS: Dict[str, List[str]] = {
+    "tiktok": [
+        "tiktok.com",
+        "tiktokv.com",
+        "tiktokv.eu",
+        "tiktokv.us",
+        "tiktokcdn.com",
+        "tiktokcdn-eu.com",
+        "tiktokcdn-us.com",
+        "tiktokrow-cdn.com",
+        "tiktokw.eu",
+        "tiktokw.us",
+        "ttwstatic.com",
+        "ttlivecdn.com",
+        "ibyteimg.com",
+        "ibytedtos.com",
+        "byteimg.com",
+        "byteoversea.com",
+        "byteoversea.net",
+        "byteeffecttos-g.com",
+        "byteeffecttos.com",
+        "bytefcdn-oversea.com",
+        "bytefcdn-ttpeu.com",
+        "bytedapm.com",
+        "bytegoofy.com",
+        "bytescm.com",
+        "bytednsdoc.com",
+        "pstatp.com",
+        "sgpstatp.com",
+        "snssdk.com",
+        "amemv.com",
+        "muscdn.com",
+        "musical.ly",
+        "tiktok.tps.dv.tech",
+    ],
+    "youtube": [
+        "youtube.com",
+        "youtu.be",
+        "googlevideo.com",
+        "ytimg.com",
+        "ggpht.com",
+        "youtubei.googleapis.com",
+        "youtube-nocookie.com",
+        "youtubekids.com",
+        "withyoutube.com",
+        "yt.be",
+    ],
+    "instagram": [
+        "instagram.com",
+        "cdninstagram.com",
+        "ig.me",
+        "igcdn.com",
+        "igsonar.com",
+        "igtv.com",
+    ],
+    "facebook": [
+        "facebook.com",
+        "facebook.net",
+        "fbcdn.net",
+        "fbsbx.com",
+        "fb.com",
+        "fb.me",
+        "messenger.com",
+        "m.me",
+        "tfbnw.net",
+    ],
+    "steam": [
+        "steampowered.com",
+        "steamcommunity.com",
+        "steamstatic.com",
+        "steamcontent.com",
+        "steamgames.com",
+        "steamusercontent.com",
+        "steamserver.net",
+        "steam-api.com",
+        "steam-chat.com",
+        "s.team",
+    ],
+    "discord": [
+        "discord.com",
+        "discordapp.com",
+        "discordapp.net",
+        "discord.gg",
+        "discord.media",
+        "discordcdn.com",
+        "discord.co",
+        "dis.gd",
+    ],
+    "twitch": [
+        "twitch.tv",
+        "ttvnw.net",
+        "jtvnw.net",
+        "twitchcdn.net",
+        "twitchsvc.net",
+        "ext-twitch.tv",
+    ],
+    "roblox": [
+        "roblox.com",
+        "rbxcdn.com",
+        "robloxcdn.com",
+        "rbx.com",
+        "rbxinfra.com",
+        "rbxinfra.net",
+    ],
+    "telegram": [
+        "telegram.org",
+        "t.me",
+        "telegram.me",
+        "telegram.dog",
+        "telegra.ph",
+        "telesco.pe",
+        "telegram-cdn.org",
+        "cdn-telegram.org",
+        "tdesktop.com",
+        "web.telegram.org",
+    ],
+    "netflix": [
+        "netflix.com",
+        "netflix.net",
+        "nflxso.net",
+        "nflxvideo.net",
+        "nflximg.net",
+        "nflximg.com",
+        "nflxext.com",
+        "fast.com",
+    ],
+    "spotify": [
+        "spotify.com",
+        "scdn.co",
+        "spotifycdn.com",
+        "spotifycdn.net",
+        "byspotify.com",
+        "pscdn.co",
+        "spoti.fi",
+        "audio-ak-spotify-com.akamaized.net",
+        "audio4-ak-spotify-com.akamaized.net",
+        "heads-ak-spotify-com.akamaized.net",
+        "heads4-ak-spotify-com.akamaized.net",
+    ],
+    "twitter": [
+        "twitter.com",
+        "x.com",
+        "twimg.com",
+        "t.co",
+        "twtrdns.net",
+        "twttr.com",
+        "twttr.net",
+        "pscp.tv",
+        "periscope.tv",
+        "cms-twdigitalassets.com",
+    ],
+}
+
+_ALL_SERVICE_ENFORCED_RULES: Set[str] = {
+    f"||{dom}^$important"
+    for doms in SERVICE_ENFORCED_DOMAINS.values()
+    for dom in doms
+}
+
+_DEFAULT_MAX_CACHE_TTL_SECONDS = 60
+_DEFAULT_BLOCKED_RESPONSE_TTL_SECONDS = 10
+
+
+def _build_service_enforced_rules(service_ids: List[str]) -> List[str]:
+    rules: List[str] = []
+    seen: Set[str] = set()
+    for raw_sid in service_ids:
+        sid = str(raw_sid).strip().lower()
+        for dom in SERVICE_ENFORCED_DOMAINS.get(sid, []):
+            rule = f"||{dom}^$important"
+            if rule not in seen:
+                seen.add(rule)
+                rules.append(rule)
+    return rules
+
+
+def _filter_visible_user_rules(raw_rules: List[Any]) -> List[str]:
+    return [
+        str(r)
+        for r in raw_rules
+        if str(r).strip().lower() not in _ALL_SERVICE_ENFORCED_RULES
+    ]
+
 
 def _detect_provider(upstreams: List[str]) -> str:
     joined = " ".join(upstreams).lower()
@@ -316,7 +502,7 @@ class AdGuardClient:
         if not isinstance(r_filt, Exception) and r_filt.status_code == 200:
             fj = r_filt.json()
             result["toggles"]["adblock"] = bool(fj.get("enabled", True))
-            result["user_rules"] = [str(r) for r in (fj.get("user_rules") or [])]
+            result["user_rules"] = _filter_visible_user_rules(fj.get("user_rules") or [])
             result["filters"] = [
                 {
                     "id": item.get("id"),
@@ -408,12 +594,15 @@ class AdGuardClient:
                 cfg = info_resp.json()
                 provider = _detect_provider(cfg.get("upstream_dns") or [])
                 cfg["upstream_dns"] = _build_upstreams(provider, enabled)
+                cfg["cache_ttl_max"] = _DEFAULT_MAX_CACHE_TTL_SECONDS
+                cfg["blocked_response_ttl"] = _DEFAULT_BLOCKED_RESPONSE_TTL_SECONDS
                 resp = await self._request(client, "post", "/control/dns_config", json=cfg)
             else:
                 raise ValueError(f"Unsupported feature: {feature}")
 
             if resp.status_code not in (200, 204):
                 raise AdGuardError(f"AdGuard returned HTTP {resp.status_code}")
+            await self._clear_cache_best_effort(client)
 
         self.invalidate_cache()
         return {"success": True, "feature": feature, "enabled": enabled}
@@ -449,9 +638,12 @@ class AdGuardClient:
             new_upstreams = _build_upstreams(provider, doh_enabled)
             cfg["upstream_dns"] = new_upstreams
             cfg["bootstrap_dns"] = ["1.1.1.1", "9.9.9.9"]
+            cfg["cache_ttl_max"] = _DEFAULT_MAX_CACHE_TTL_SECONDS
+            cfg["blocked_response_ttl"] = _DEFAULT_BLOCKED_RESPONSE_TTL_SECONDS
             resp = await self._request(client, "post", "/control/dns_config", json=cfg)
             if resp.status_code not in (200, 204):
                 raise AdGuardError(f"Failed to update dns_config: HTTP {resp.status_code}")
+            await self._clear_cache_best_effort(client)
         self.invalidate_cache()
         return {"success": True, "provider": provider, "upstream_dns": new_upstreams}
 
@@ -548,7 +740,11 @@ class AdGuardClient:
                     continue
 
             if is_blocked:
-                if f"||{dom_low}^" in user_rules or dom_low in user_rules:
+                rule_low = str(item.get("rule") or "").strip().lower()
+                if "BlockedService" in reason or rule_low in _ALL_SERVICE_ENFORCED_RULES:
+                    source = "blocked_service"
+                    reason_label = "Блокировка сервиса"
+                elif f"||{dom_low}^" in user_rules or dom_low in user_rules:
                     source = "user_rule"
                     reason_label = "Ручное правило"
                 elif "Parental" in reason:
@@ -557,9 +753,6 @@ class AdGuardClient:
                 elif "SafeBrowsing" in reason:
                     source = "safebrowsing"
                     reason_label = "Фишинг / Угроза"
-                elif "BlockedService" in reason:
-                    source = "blocked_service"
-                    reason_label = "Блокировка сервиса"
                 else:
                     source = "filter_list"
                     reason_label = "Подписка AdGuard"
@@ -602,10 +795,18 @@ class AdGuardClient:
 
         return {"success": True, "logs": logs, "total": len(logs)}
 
+    async def _clear_cache_best_effort(self, client: httpx.AsyncClient) -> None:
+        """Flush AdGuard Home DNS cache after rule/service updates without failing the mutation."""
+        try:
+            await self._request(client, "post", "/control/cache_clear")
+        except Exception as exc:
+            logger.debug("Best-effort AdGuard cache clear skipped: %s", exc)
+
     async def _set_user_rules(self, client: httpx.AsyncClient, rules: List[str]) -> None:
         resp = await self._request(client, "post", "/control/filtering/set_rules", json={"rules": rules})
         if resp.status_code not in (200, 204):
             raise AdGuardError(f"Failed to set filtering rules: HTTP {resp.status_code}")
+        await self._clear_cache_best_effort(client)
         self.invalidate_cache()
 
     async def block_domain(self, domain: str) -> Dict[str, Any]:
@@ -653,7 +854,7 @@ class AdGuardClient:
             resp = await self._request(client, "get", "/control/filtering/status")
             if resp.status_code != 200:
                 raise AdGuardError("Failed to fetch filtering rules")
-            return [str(r) for r in (resp.json().get("user_rules") or [])]
+            return _filter_visible_user_rules(resp.json().get("user_rules") or [])
 
     async def add_rule(self, domain: str, mode: str) -> Dict[str, Any]:
         await self._require_session()
@@ -673,7 +874,7 @@ class AdGuardClient:
             if rule not in {r.strip().lower() for r in updated}:
                 updated.insert(0, rule)
             await self._set_user_rules(client, updated)
-        return {"success": True, "rule": rule, "rules": updated}
+        return {"success": True, "rule": rule, "rules": _filter_visible_user_rules(updated)}
 
     async def delete_rule(self, rule: str) -> Dict[str, Any]:
         await self._require_session()
@@ -685,7 +886,7 @@ class AdGuardClient:
             rules = [str(r) for r in (resp.json().get("user_rules") or [])]
             updated = [r for r in rules if r.strip() != target]
             await self._set_user_rules(client, updated)
-        return {"success": True, "removed": target, "rules": updated}
+        return {"success": True, "removed": target, "rules": _filter_visible_user_rules(updated)}
 
     async def get_blocked_services(self, *, force: bool = False) -> Dict[str, Any]:
         now = time.monotonic()
@@ -733,6 +934,7 @@ class AdGuardClient:
 
     async def set_blocked_services(self, ids: List[str]) -> Dict[str, Any]:
         await self._require_session()
+        normalized_ids = [str(x).strip().lower() for x in ids if str(x).strip()]
         async with self._make_client() as client:
             r_get = await self._request(client, "get", "/control/blocked_services/get")
             schedule = {"time_zone": "UTC"}
@@ -742,14 +944,34 @@ class AdGuardClient:
                 client,
                 "put",
                 "/control/blocked_services/update",
-                json={"ids": ids, "schedule": schedule},
+                json={"ids": normalized_ids, "schedule": schedule},
             )
             if resp.status_code in (404, 405):
-                resp = await self._request(client, "post", "/control/blocked_services/set", json=ids)
+                resp = await self._request(client, "post", "/control/blocked_services/set", json=normalized_ids)
             if resp.status_code not in (200, 204):
                 raise AdGuardError(f"Failed to update blocked services: HTTP {resp.status_code}")
+
+            # Sync enforced $important rules for active blocked services so regional/EU failovers
+            # (e.g. tiktokv.eu, byteeffecttos-g.com) and @@|| user exceptions cannot bypass the block.
+            filt_resp = await self._request(client, "get", "/control/filtering/status")
+            if filt_resp.status_code == 200 and isinstance(filt_resp.json(), dict):
+                raw_rules = [str(r) for r in (filt_resp.json().get("user_rules") or [])]
+                manual_rules = _filter_visible_user_rules(raw_rules)
+                enforced_rules = _build_service_enforced_rules(normalized_ids)
+                merged_rules = enforced_rules + manual_rules
+                if merged_rules != raw_rules:
+                    r_set = await self._request(
+                        client,
+                        "post",
+                        "/control/filtering/set_rules",
+                        json={"rules": merged_rules},
+                    )
+                    if r_set.status_code not in (200, 204):
+                        raise AdGuardError(f"Failed to sync enforced service rules: HTTP {r_set.status_code}")
+
+            await self._clear_cache_best_effort(client)
         self.invalidate_cache()
-        return {"success": True, "ids": ids}
+        return {"success": True, "ids": normalized_ids}
 
     async def refresh_filters(self) -> Dict[str, Any]:
         await self._require_session()
