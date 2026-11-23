@@ -268,7 +268,7 @@ async def api_dns_services_get() -> Dict[str, Any]:
 @app.put("/api/dns/services")
 async def api_dns_services_put(payload: BlockedServicesPayload) -> Dict[str, Any]:
     try:
-        return await adguard_client.set_blocked_services(payload.ids)
+        return await adguard_client.set_blocked_services(payload.ids, background=True)
     except Exception as exc:
         raise HTTPException(status_code=502, detail="AdGuard Home unavailable") from exc
 

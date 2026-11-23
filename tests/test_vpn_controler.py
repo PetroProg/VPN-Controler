@@ -27,7 +27,7 @@ def test_html_and_pwa_routes():
     r_sw = client.get("/sw.js")
     assert r_sw.status_code == 200
     assert r_sw.headers.get("service-worker-allowed") == "/"
-    assert "vc-v1.2.1" in r_sw.text
+    assert "vc-v1.2.2" in r_sw.text
     assert "API_CACHE" not in r_sw.text
     assert "k.startsWith('vc-')" in r_sw.text
 
@@ -439,5 +439,65 @@ async def test_blocked_services_syncs_enforced_important_rules_and_clears_cache(
         await ag.set_blocked_services([])
         assert cache_clear_calls == 2
         assert stored_rules == ["||custom-manual.test^", "@@||spotify.com^", "@@||jut.su^$important"]
+
+
+@pytest.mark.asyncio
+async def test_blocked_services_background_coalesces_rapid_updates():
+    ag = AdGuardClient()
+    ag._session_cookie = "tok123"
+    stored_rules = ["@@||spotify.com^"]
+    applied_updates = []
+    cache_clear_calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal stored_rules, cache_clear_calls
+        import json
+        path = request.url.path
+        if path == "/control/blocked_services/get":
+            return httpx.Response(200, json={"ids": applied_updates[-1] if applied_updates else [], "schedule": {"time_zone": "UTC"}})
+        if path == "/control/blocked_services/update":
+            await asyncio.sleep(0.03)
+            body = json.loads(request.content.decode())
+            applied_updates.append(list(body.get("ids") or []))
+            return httpx.Response(200, json={})
+        if path == "/control/filtering/status":
+            return httpx.Response(200, json={"enabled": True, "user_rules": list(stored_rules), "filters": []})
+        if path == "/control/filtering/set_rules":
+            body = json.loads(request.content.decode())
+            stored_rules = list(body.get("rules") or [])
+            return httpx.Response(200, json={})
+        if path == "/control/cache_clear":
+            cache_clear_calls += 1
+            return httpx.Response(200, json={})
+        return httpx.Response(200, json={"running": True, "protection_enabled": True})
+
+    real_async_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+
+    def client_with_transport(*args, **kwargs):
+        kwargs["transport"] = transport
+        return real_async_client(*args, **kwargs)
+
+    with patch("app.services.adguard.settings.ADGUARD_PASSWORD", "test-secret"), \
+         patch("app.services.adguard.httpx.AsyncClient", side_effect=client_with_transport):
+        r1 = await ag.set_blocked_services(["tiktok"], background=True)
+        r2 = await ag.set_blocked_services(["tiktok", "youtube"], background=True)
+        r3 = await ag.set_blocked_services(["tiktok", "youtube", "instagram"], background=True)
+
+        assert r1["queued"] is True
+        assert r2["queued"] is True
+        assert r3 == {"success": True, "ids": ["tiktok", "youtube", "instagram"], "queued": True}
+
+        # Wait for background worker to finish
+        if ag._services_worker_task is not None:
+            await ag._services_worker_task
+
+        assert applied_updates[-1] == ["tiktok", "youtube", "instagram"]
+        assert len(applied_updates) <= 2
+        assert "||tiktokv.eu^$important" in stored_rules
+        assert "||youtube.com^$important" in stored_rules
+        assert "||instagram.com^$important" in stored_rules
+        assert cache_clear_calls >= 1
+
 
 

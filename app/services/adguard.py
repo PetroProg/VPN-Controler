@@ -273,6 +273,9 @@ class AdGuardClient:
         self._services_cache: Tuple[float, Optional[Dict[str, Any]]] = (0.0, None)
         self._session_cookie: Optional[str] = None
         self._auth_lock = asyncio.Lock()
+        self._desired_service_ids: Optional[List[str]] = None
+        self._services_worker_task: Optional[asyncio.Task[None]] = None
+        self._blocked_services_schedule: Optional[Dict[str, Any]] = None
 
     def invalidate_cache(self) -> None:
         """Invalidate short-lived in-memory overview and services caches after a mutation."""
@@ -535,8 +538,13 @@ class AdGuardClient:
             sv = r_svcs.json()
             if isinstance(sv, dict):
                 result["blocked_service_ids"] = list(sv.get("ids") or [])
+                if sv.get("schedule"):
+                    self._blocked_services_schedule = sv.get("schedule")
             elif isinstance(sv, list):
                 result["blocked_service_ids"] = list(sv)
+
+        if self._desired_service_ids is not None:
+            result["blocked_service_ids"] = list(self._desired_service_ids)
 
         if result["online"]:
             self._overview_cache = (time.monotonic(), dict(result))
@@ -914,8 +922,13 @@ class AdGuardClient:
             body = r_get.json()
             if isinstance(body, dict):
                 active_ids = [str(x).lower() for x in (body.get("ids") or [])]
+                if body.get("schedule"):
+                    self._blocked_services_schedule = body.get("schedule")
             elif isinstance(body, list):
                 active_ids = [str(x).lower() for x in body]
+
+        if self._desired_service_ids is not None:
+            active_ids = list(self._desired_service_ids)
 
         active_set = set(active_ids)
         services: List[Dict[str, Any]] = []
@@ -932,14 +945,33 @@ class AdGuardClient:
         self._services_cache = (time.monotonic(), payload)
         return payload
 
-    async def set_blocked_services(self, ids: List[str]) -> Dict[str, Any]:
+    def _apply_blocked_services_to_cache(self, normalized_ids: List[str]) -> None:
+        """Reflect desired blocked service IDs in short-lived memory caches immediately."""
+        active_set = set(normalized_ids)
+        now = time.monotonic()
+        _, cached_svcs = self._services_cache
+        if cached_svcs is not None and isinstance(cached_svcs.get("services"), list):
+            updated_svcs = [
+                {**svc, "blocked": str(svc.get("id") or "").lower() in active_set}
+                for svc in cached_svcs["services"]
+            ]
+            self._services_cache = (now, {"services": updated_svcs, "active_ids": list(normalized_ids)})
+        _, cached_ov = self._overview_cache
+        if cached_ov is not None:
+            updated_ov = dict(cached_ov)
+            updated_ov["blocked_service_ids"] = list(normalized_ids)
+            self._overview_cache = (now, updated_ov)
+
+    async def _apply_blocked_services_now(self, normalized_ids: List[str]) -> None:
         await self._require_session()
-        normalized_ids = [str(x).strip().lower() for x in ids if str(x).strip()]
         async with self._make_client() as client:
-            r_get = await self._request(client, "get", "/control/blocked_services/get")
-            schedule = {"time_zone": "UTC"}
-            if r_get.status_code == 200 and isinstance(r_get.json(), dict):
-                schedule = r_get.json().get("schedule") or schedule
+            schedule = self._blocked_services_schedule
+            if schedule is None:
+                r_get = await self._request(client, "get", "/control/blocked_services/get")
+                schedule = {"time_zone": "UTC"}
+                if r_get.status_code == 200 and isinstance(r_get.json(), dict):
+                    schedule = r_get.json().get("schedule") or schedule
+                self._blocked_services_schedule = schedule
             resp = await self._request(
                 client,
                 "put",
@@ -970,6 +1002,39 @@ class AdGuardClient:
                         raise AdGuardError(f"Failed to sync enforced service rules: HTTP {r_set.status_code}")
 
             await self._clear_cache_best_effort(client)
+
+    async def _drain_blocked_services_worker(self) -> None:
+        """Coalescing background worker that applies the latest desired blocked service IDs."""
+        try:
+            while self._desired_service_ids is not None:
+                target_ids = list(self._desired_service_ids)
+                await self._apply_blocked_services_now(target_ids)
+                if self._desired_service_ids == target_ids:
+                    self._desired_service_ids = None
+                    break
+        except Exception as exc:
+            logger.warning("Background blocked_services sync failed: %s", exc)
+            self._desired_service_ids = None
+        finally:
+            self.invalidate_cache()
+            self._services_worker_task = None
+
+    async def set_blocked_services(
+        self,
+        ids: List[str],
+        *,
+        background: bool = False,
+    ) -> Dict[str, Any]:
+        normalized_ids = [str(x).strip().lower() for x in ids if str(x).strip()]
+        if background:
+            self._desired_service_ids = list(normalized_ids)
+            self._apply_blocked_services_to_cache(normalized_ids)
+            if self._services_worker_task is None or self._services_worker_task.done():
+                self._services_worker_task = asyncio.create_task(self._drain_blocked_services_worker())
+            return {"success": True, "ids": normalized_ids, "queued": True}
+
+        self._desired_service_ids = None
+        await self._apply_blocked_services_now(normalized_ids)
         self.invalidate_cache()
         return {"success": True, "ids": normalized_ids}
 

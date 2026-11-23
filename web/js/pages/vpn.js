@@ -56,6 +56,10 @@ const state = {
 let countdownTimer = null;
 let refreshTimer = null;
 let searchDebounce = null;
+let servicesMutationSeq = 0;
+let servicesSyncRunning = false;
+let pendingServiceIds = null;
+let lastServiceMutationAt = 0;
 
 function formatCountdown(sec) {
   const s = Math.max(0, Math.floor(sec));
@@ -566,6 +570,7 @@ async function loadVpnStatusAndTraffic() {
 }
 
 async function loadOverviewAndLogs() {
+  const reqSeq = servicesMutationSeq;
   const q = new URLSearchParams({
     limit: '60',
     filter: state.logStatus,
@@ -578,11 +583,20 @@ async function loadOverviewAndLogs() {
   ]);
   const patch = {};
   if (ovRes.status === 'fulfilled') {
+    const canSyncServices = !servicesSyncRunning
+      && reqSeq === servicesMutationSeq
+      && (Date.now() - lastServiceMutationAt) > 2500;
+    const prevBlockedIds = state.overview && Array.isArray(state.overview.blocked_service_ids)
+      ? state.overview.blocked_service_ids
+      : state.activeServiceIds;
     state.overview = ovRes.value;
-    patch.overview = ovRes.value;
+    if (!canSyncServices && Array.isArray(prevBlockedIds)) {
+      state.overview.blocked_service_ids = prevBlockedIds;
+    }
+    patch.overview = state.overview;
     const durMs = Number(ovRes.value.protection_disabled_duration_ms || 0);
     state.pauseRemainingSec = !ovRes.value.protection && durMs > 0 ? Math.ceil(durMs / 1000) : 0;
-    if (Array.isArray(ovRes.value.blocked_service_ids)) {
+    if (canSyncServices && Array.isArray(ovRes.value.blocked_service_ids)) {
       const activeIds = ovRes.value.blocked_service_ids.map((x) => String(x).toLowerCase());
       const activeSet = new Set(activeIds);
       state.activeServiceIds = activeIds;
@@ -604,12 +618,18 @@ async function loadOverviewAndLogs() {
 }
 
 async function loadServicesAndLatencies(forceProbe = false) {
+  const reqSeq = servicesMutationSeq;
   const [svcRes, latRes] = await Promise.allSettled([
     apiGet('/api/dns/services'),
     apiGet(`/api/dns/doh-latency?force=${forceProbe ? 'true' : 'false'}`),
   ]);
   const patch = {};
-  if (svcRes.status === 'fulfilled' && Array.isArray(svcRes.value.services)) {
+  if (
+    svcRes.status === 'fulfilled'
+    && Array.isArray(svcRes.value.services)
+    && !servicesSyncRunning
+    && reqSeq === servicesMutationSeq
+  ) {
     state.services = svcRes.value.services;
     state.activeServiceIds = svcRes.value.active_ids || [];
     patch.services = state.services;
@@ -620,6 +640,28 @@ async function loadServicesAndLatencies(forceProbe = false) {
     patch.dohLatencies = state.dohLatencies;
   }
   if (Object.keys(patch).length) writePageCache(patch);
+}
+
+async function flushBlockedServicesSync() {
+  if (servicesSyncRunning) return;
+  servicesSyncRunning = true;
+  try {
+    while (pendingServiceIds !== null) {
+      const targetIds = pendingServiceIds;
+      pendingServiceIds = null;
+      await apiPut('/api/dns/services', { ids: targetIds });
+    }
+  } catch (err) {
+    showToast(err.message || 'Ошибка синхронизации сервисов', 'err');
+    if (pendingServiceIds === null) {
+      servicesSyncRunning = false;
+      await loadServicesAndLatencies(false);
+      renderShieldSegment();
+      return;
+    }
+  } finally {
+    servicesSyncRunning = false;
+  }
 }
 
 function renderAllViews() {
@@ -954,15 +996,20 @@ document.querySelector('main').addEventListener('click', async (e) => {
     const feature = toggleBtn.dataset.toggleId;
     const current = toggleBtn.getAttribute('aria-checked') === 'true';
     const nextVal = !current;
+    if (state.overview && state.overview.toggles) {
+      state.overview.toggles[feature] = nextVal;
+      writePageCache({ overview: state.overview });
+    }
+    renderShieldSegment();
+    showToast(`Модуль обновлён: ${nextVal ? 'Вкл' : 'Выкл'}`, nextVal ? 'ok' : 'info');
     try {
       await apiPost('/api/dns/toggle', { feature, enabled: nextVal });
+    } catch (err) {
       if (state.overview && state.overview.toggles) {
-        state.overview.toggles[feature] = nextVal;
+        state.overview.toggles[feature] = current;
         writePageCache({ overview: state.overview });
       }
       renderShieldSegment();
-      showToast(`Модуль обновлён: ${nextVal ? 'Вкл' : 'Выкл'}`, nextVal ? 'ok' : 'info');
-    } catch (err) {
       showToast(err.message, 'err');
     }
     return;
@@ -971,16 +1018,23 @@ document.querySelector('main').addEventListener('click', async (e) => {
   const dohBtn = tEl.closest('[data-doh-id]');
   if (dohBtn) {
     const provider = dohBtn.dataset.dohId;
+    const prevProvider = state.overview ? state.overview.provider : null;
+    if (state.overview) {
+      state.overview.provider = provider;
+      writePageCache({ overview: state.overview });
+    }
+    renderKpis();
+    renderShieldSegment();
+    showToast(`Активный шлюз: ${provider}`, 'ok');
     try {
       await apiPost('/api/dns/upstream', { provider });
-      if (state.overview) {
-        state.overview.provider = provider;
+    } catch (err) {
+      if (state.overview && prevProvider) {
+        state.overview.provider = prevProvider;
         writePageCache({ overview: state.overview });
       }
       renderKpis();
       renderShieldSegment();
-      showToast(`Активный шлюз: ${provider}`, 'ok');
-    } catch (err) {
       showToast(err.message, 'err');
     }
     return;
@@ -998,23 +1052,24 @@ document.querySelector('main').addEventListener('click', async (e) => {
     if (willBlock) currentSet.add(sid);
     else currentSet.delete(sid);
     const nextIds = Array.from(currentSet);
-    try {
-      await apiPut('/api/dns/services', { ids: nextIds });
-      state.activeServiceIds = nextIds;
-      state.services = state.services.map((s) => ({ ...s, blocked: currentSet.has(s.id) }));
-      if (state.overview) {
-        state.overview.blocked_service_ids = nextIds;
-      }
-      writePageCache({
-        services: state.services,
-        activeServiceIds: state.activeServiceIds,
-        ...(state.overview ? { overview: state.overview } : {}),
-      });
-      renderShieldSegment();
-      showToast(`${sid}: ${willBlock ? 'заблокирован' : 'разблокирован'}`, willBlock ? 'warn' : 'ok');
-    } catch (err) {
-      showToast(err.message, 'err');
+
+    servicesMutationSeq += 1;
+    lastServiceMutationAt = Date.now();
+    state.activeServiceIds = nextIds;
+    state.services = state.services.map((s) => ({ ...s, blocked: currentSet.has(s.id) }));
+    if (state.overview) {
+      state.overview.blocked_service_ids = nextIds;
     }
+    writePageCache({
+      services: state.services,
+      activeServiceIds: state.activeServiceIds,
+      ...(state.overview ? { overview: state.overview } : {}),
+    });
+    renderShieldSegment();
+    showToast(`${sid}: ${willBlock ? 'заблокирован' : 'разблокирован'}`, willBlock ? 'warn' : 'ok');
+
+    pendingServiceIds = nextIds;
+    flushBlockedServicesSync();
   }
 });
 
