@@ -1,7 +1,13 @@
 /* Settings page (Page 2: Настройки — Themes, Behavior, AdGuard Admin, Node & PWA) */
 
 import { apiDelete, apiGet, apiPost } from '../core/api.js';
-import { clearPageCache, isCacheFresh, readPageCache, writePageCache } from '../core/cache.js';
+import {
+  clearPageCache,
+  inspectAndGuardStorage,
+  isCacheFresh,
+  readPageCache,
+  writePageCache,
+} from '../core/cache.js';
 import {
   THEMES,
   applyI18n,
@@ -330,18 +336,27 @@ document.getElementById('rewrite-add-btn').addEventListener('click', async () =>
   }
 });
 
+async function refreshStorageIndicator() {
+  const el = document.getElementById('node-storage-usage');
+  if (!el) return;
+  const info = await inspectAndGuardStorage();
+  el.textContent = info.formattedUsage;
+  el.style.color = info.usageBytes > 10 * 1024 * 1024 ? 'var(--p-warn)' : 'var(--p-ok)';
+}
+
 document.getElementById('sw-reset-btn').addEventListener('click', async () => {
   try {
     clearPageCache();
     if ('caches' in window) {
       const keys = await caches.keys();
-      await Promise.all(keys.map((k) => caches.delete(k)));
+      await Promise.all(keys.map((k) => (k.startsWith('vc-') ? caches.delete(k) : null)));
     }
     if ('serviceWorker' in navigator) {
       const regs = await navigator.serviceWorker.getRegistrations();
       await Promise.all(regs.map((r) => r.unregister()));
     }
-    showToast('Кэш сброшен, перезагрузка...', 'ok');
+    await refreshStorageIndicator();
+    showToast('Кэш VPN Controler сброшен, перезагрузка...', 'ok');
     setTimeout(() => window.location.reload(), 600);
   } catch (err) {
     showToast(err.message, 'err');
@@ -452,4 +467,5 @@ renderPreferences();
 updateClock();
 setInterval(updateClock, 1000);
 hydrateSettingsFromCache();
+refreshStorageIndicator();
 loadSettingsData();

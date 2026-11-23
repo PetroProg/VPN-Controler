@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -39,6 +39,14 @@ app = FastAPI(
     docs_url=None,
     redoc_url=None,
 )
+
+
+@app.middleware("http")
+async def disable_api_http_cache(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 if (WEB_DIR / "css").exists():
     app.mount("/css", StaticFiles(directory=str(WEB_DIR / "css")), name="css")

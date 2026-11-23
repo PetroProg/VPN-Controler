@@ -17,6 +17,7 @@ export async function apiRequest(url, options = {}) {
       method: options.method || 'GET',
       headers,
       body,
+      cache: 'no-store',
       signal: controller.signal,
     });
     const text = await resp.text();

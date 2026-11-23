@@ -27,6 +27,14 @@ def test_html_and_pwa_routes():
     r_sw = client.get("/sw.js")
     assert r_sw.status_code == 200
     assert r_sw.headers.get("service-worker-allowed") == "/"
+    assert "vc-v1.2.0" in r_sw.text
+    assert "API_CACHE" not in r_sw.text
+    assert "k.startsWith('vc-')" in r_sw.text
+
+    r_cache_js = client.get("/js/core/cache.js")
+    assert r_cache_js.status_code == 200
+    assert "localStorage.setItem" not in r_cache_js.text
+    assert "inspectAndGuardStorage" in r_cache_js.text
 
     r_ico = client.get("/favicon.ico")
     assert r_ico.status_code == 200
@@ -40,6 +48,7 @@ def test_api_health_route():
          patch("app.main.tailscale_client.check_health", new=AsyncMock(return_value=True)):
         r = client.get("/api/health")
     assert r.status_code == 200
+    assert r.headers.get("cache-control") == "no-store"
     assert r.json() == {
         "status": "ok",
         "version": "1.0.0",

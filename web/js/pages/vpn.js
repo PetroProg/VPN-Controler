@@ -1,7 +1,7 @@
 /* Main page (Page 1: Главная — Shield-First + 3 Segments) */
 
 import { apiGet, apiPost, apiPut } from '../core/api.js';
-import { isCacheFresh, readPageCache, writePageCache } from '../core/cache.js';
+import { inspectAndGuardStorage, isCacheFresh, readPageCache, writePageCache } from '../core/cache.js';
 import { applyI18n, applyThemeAndDensity, getSettings, t } from '../core/settings.js';
 import {
   copyToClipboard,
@@ -1002,6 +1002,7 @@ window.addEventListener('themechange', () => requestAnimationFrame(drawTelemetry
 
 applyI18n(cfg.lang);
 renderSegmentsNav();
+inspectAndGuardStorage().catch(() => {});
 const cacheStatus = hydrateFromCache();
 countdownTimer = setInterval(updatePauseCountdownTick, 1000);
 if (!cacheStatus.isFresh) {
