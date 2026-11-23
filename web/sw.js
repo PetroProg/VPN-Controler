@@ -1,6 +1,6 @@
 /* VPN Controler Service Worker (Offline-ready App Shell + Network-First API) */
 
-const CACHE_VERSION = 'vc-v1.1.0';
+const CACHE_VERSION = 'vc-v1.1.1';
 const SHELL_CACHE = `vc-shell-${CACHE_VERSION}`;
 const API_CACHE = `vc-api-${CACHE_VERSION}`;
 

@@ -21,11 +21,19 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-html,
+html {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  background-color: var(--p-bg);
+}
+
 body {
   margin: 0;
   padding: 0;
-  overflow-x: hidden;
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow-x: clip;
   background-color: var(--p-bg);
   color: var(--p-text);
   font-family: -apple-system, BlinkMacSystemFont, "Inter", "SF Pro Text", "Segoe UI", Roboto, sans-serif;
@@ -33,12 +41,7 @@ body {
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   touch-action: manipulation;
-}
-
-body {
-  min-height: 100vh;
   padding-bottom: calc(5.25rem + env(safe-area-inset-bottom, 0px));
-  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 .mono {

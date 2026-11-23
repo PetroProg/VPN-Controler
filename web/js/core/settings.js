@@ -180,11 +180,41 @@ export function saveSettings(partial) {
 
 export function applyThemeAndDensity(cfg = getSettings()) {
   const th = THEME_COLORS[cfg.theme] ? cfg.theme : DEFAULT_SETTINGS.theme;
-  document.documentElement.dataset.theme = th;
-  document.documentElement.dataset.density = cfg.density === 'compact' ? 'compact' : 'standard';
-  document.documentElement.lang = cfg.lang === 'en' ? 'en' : 'ru';
-  const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', THEME_COLORS[th]);
+  const bg = THEME_COLORS[th];
+  const isDark = th !== 'warm-paper';
+  const scheme = isDark ? 'dark' : 'light';
+
+  const root = document.documentElement;
+  root.dataset.theme = th;
+  root.dataset.density = cfg.density === 'compact' ? 'compact' : 'standard';
+  root.lang = cfg.lang === 'en' ? 'en' : 'ru';
+  root.style.colorScheme = scheme;
+  root.style.backgroundColor = bg;
+  if (document.body) {
+    document.body.style.backgroundColor = bg;
+  }
+
+  let metaTheme = document.querySelector('meta[name="theme-color"]');
+  if (!metaTheme) {
+    metaTheme = document.createElement('meta');
+    metaTheme.name = 'theme-color';
+    document.head.appendChild(metaTheme);
+  }
+  metaTheme.setAttribute('content', bg);
+
+  let metaScheme = document.querySelector('meta[name="color-scheme"]');
+  if (!metaScheme) {
+    metaScheme = document.createElement('meta');
+    metaScheme.name = 'color-scheme';
+    document.head.appendChild(metaScheme);
+  }
+  metaScheme.setAttribute('content', scheme);
+
+  const metaStatusBar = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+  if (metaStatusBar) {
+    metaStatusBar.setAttribute('content', isDark ? 'black-translucent' : 'default');
+  }
+
   window.dispatchEvent(new CustomEvent('themechange', { detail: { theme: th } }));
 }
 

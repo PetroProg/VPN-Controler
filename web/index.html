@@ -6,6 +6,7 @@
   <title>VPN Controler</title>
   <meta name="description" content="Мобильный пульт управления Tailscale Mesh и AdGuard Home DNS Shield">
   <meta name="theme-color" content="#f5f3ee">
+  <meta name="color-scheme" content="light">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -25,15 +26,24 @@
           'matte-copper': '#0f0c0b'
         };
         var th = colors[cfg.theme] ? cfg.theme : 'warm-paper';
-        document.documentElement.dataset.theme = th;
-        document.documentElement.dataset.density = cfg.density === 'compact' ? 'compact' : 'standard';
+        var isDark = th !== 'warm-paper';
+        var scheme = isDark ? 'dark' : 'light';
+        var root = document.documentElement;
+        root.dataset.theme = th;
+        root.dataset.density = cfg.density === 'compact' ? 'compact' : 'standard';
+        root.style.colorScheme = scheme;
+        root.style.backgroundColor = colors[th];
         var m = document.querySelector('meta[name="theme-color"]');
         if (m) m.setAttribute('content', colors[th]);
+        var cs = document.querySelector('meta[name="color-scheme"]');
+        if (cs) cs.setAttribute('content', scheme);
+        var sb = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+        if (sb) sb.setAttribute('content', isDark ? 'black-translucent' : 'default');
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="/css/themes.css?v=2">
-  <link rel="stylesheet" href="/css/app.css?v=2">
+  <link rel="stylesheet" href="/css/themes.css?v=3">
+  <link rel="stylesheet" href="/css/app.css?v=3">
 </head>
 <body>
 
@@ -336,6 +346,6 @@
     </div>
   </div>
 
-  <script type="module" src="/js/pages/vpn.js?v=2"></script>
+  <script type="module" src="/js/pages/vpn.js?v=3"></script>
 </body>
 </html>
